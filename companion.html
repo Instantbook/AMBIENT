@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#000000">
+<title>AMBIENT · companion</title>
+<style>
+:root{--bg:#000;--ink:#E8F4F6;--dim:#7E9296;--faint:#313D40;
+  --accent:#4FD4E8;--soft:rgba(79,212,232,.14);
+  --mono:ui-monospace,'SF Mono','Roboto Mono',Menlo,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);
+  min-height:100vh;padding:16px;max-width:460px;margin:0 auto}
+h1{font-family:var(--mono);font-size:13px;letter-spacing:.15em;
+  color:var(--accent);display:flex;justify-content:space-between;
+  align-items:baseline;border-bottom:1px solid var(--faint);
+  padding-bottom:10px}
+h1 small{color:var(--dim);font-weight:400;font-size:11px}
+#link.on{color:var(--accent)}#link.off{color:var(--dim)}
+.sect{margin-top:18px}
+.sect h2{font-family:var(--mono);font-size:10px;letter-spacing:.18em;
+  color:var(--dim);margin-bottom:10px}
+button{background:transparent;color:var(--ink);border:1px solid var(--faint);
+  border-radius:3px;padding:14px;font-family:var(--mono);font-size:14px;
+  letter-spacing:.06em}
+button:active{border-color:var(--accent);background:var(--soft);
+  color:var(--accent)}
+input,textarea{width:100%;background:transparent;color:var(--ink);
+  border:1px solid var(--faint);border-radius:3px;padding:11px;
+  font-family:var(--mono);font-size:14px;outline:none}
+input:focus,textarea:focus{border-color:var(--accent)}
+#pad{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+#pad .wide{grid-column:span 3}
+.row2{display:flex;gap:10px;margin-top:10px}
+.row2 button{flex:1}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chips button{padding:9px 13px;font-size:12px;color:var(--dim)}
+.note{color:var(--dim);font-size:12px;line-height:1.5;margin-top:8px}
+#log{font-size:13px;color:var(--dim);margin-top:8px;min-height:18px}
+</style>
+</head>
+<body>
+<h1>AMBIENT <small>companion</small> <span id="link" class="off">○ not linked</span></h1>
+
+<div class="sect" id="pair">
+  <h2>PAIR</h2>
+  <input id="room" placeholder="room code (on the glasses — CLAUDE or system card)"
+    autocapitalize="characters" maxlength="5">
+  <div class="row2">
+    <button onclick="connect()">Link to glasses</button>
+  </div>
+  <div class="note">Worker URL is set once below; both stick on this phone.</div>
+  <input id="worker" placeholder="https://your-worker.workers.dev"
+    style="margin-top:10px">
+</div>
+
+<div class="sect">
+  <h2>PAD</h2>
+  <div id="pad">
+    <span></span><button onclick="key('up')">▲</button><span></span>
+    <button onclick="key('left')">◄</button>
+    <button onclick="key('enter')">OK</button>
+    <button onclick="key('right')">►</button>
+    <span></span><button onclick="key('down')">▼</button><span></span>
+    <button class="wide" onclick="key('back')">BACK · OVERVIEW</button>
+  </div>
+</div>
+
+<div class="sect">
+  <h2>ASK CLAUDE</h2>
+  <textarea id="chat" rows="2" placeholder="speak-to-type here, send to the glasses…"></textarea>
+  <div class="row2"><button onclick="sendChat()">Send to Claude</button></div>
+</div>
+
+<div class="sect">
+  <h2>TYPE TO SCREEN</h2>
+  <input id="text" placeholder="text for the active card (search, entry…)">
+  <div class="row2"><button onclick="sendText()">Send text</button></div>
+</div>
+
+<div class="sect">
+  <h2>SCENES</h2>
+  <div class="chips">
+    <button onclick="act('scene.all')">ALL</button>
+    <button onclick="act('scene.morning')">MORNING</button>
+    <button onclick="act('scene.flight')">FLIGHT</button>
+    <button onclick="act('scene.evening')">EVENING</button>
+  </div>
+</div>
+
+<div class="sect">
+  <h2>PALETTE</h2>
+  <div class="chips">
+    <button onclick="act('theme.day-cyan')">day-cyan</button>
+    <button onclick="act('theme.dim-amber')">dim-amber</button>
+    <button onclick="act('theme.sea')">sea</button>
+    <button onclick="act('theme.high-contrast')">contrast</button>
+  </div>
+</div>
+
+<div class="sect">
+  <h2>JUMP TO PANEL</h2>
+  <div class="chips">
+    <button onclick="act('stage.clock')">clock</button>
+    <button onclick="act('stage.weather')">weather</button>
+    <button onclick="act('stage.markets')">markets</button>
+    <button onclick="act('stage.headlines')">news</button>
+    <button onclick="act('stage.claude')">claude</button>
+    <button onclick="act('stage.radio')">radio</button>
+    <button onclick="act('stage.vis')">visual</button>
+  </div>
+</div>
+<div id="log"></div>
+
+<script>
+"use strict";
+let ws=null;
+const $=id=>document.getElementById(id);
+$("room").value=localStorage.getItem("amb.room")||"";
+$("worker").value=localStorage.getItem("amb.worker")||"";
+function log(m){$("log").textContent=m}
+function setLink(on){const el=$("link");
+  el.className=on?"on":"off";
+  el.textContent=on?"● linked":"○ not linked"}
+function connect(){
+  const room=$("room").value.trim().toUpperCase();
+  const base=$("worker").value.trim();
+  if(!room||!base){log("room code and worker URL needed");return}
+  localStorage.setItem("amb.room",room);
+  localStorage.setItem("amb.worker",base);
+  try{ws&&ws.close()}catch(e){}
+  const url=base.replace(/^http/,"ws").replace(/\/$/,"")+
+    "/ws?room="+encodeURIComponent(room)+"&role=remote";
+  try{ws=new WebSocket(url)}catch(e){log("bad worker URL");return}
+  ws.onopen=()=>{setLink(true);log("linked to "+room)};
+  ws.onclose=()=>{setLink(false);log("link closed")};
+  ws.onerror=()=>log("link error — check worker /ws");
+}
+function send(o){
+  if(!ws||ws.readyState!==1){log("not linked");return}
+  ws.send(JSON.stringify(o));
+}
+function key(k){send({t:"key",k})}
+function act(id){send({t:"action",id})}
+function sendChat(){
+  const v=$("chat").value.trim();if(!v)return;
+  send({t:"inject",kind:"chat",v});$("chat").value="";
+  log("sent to claude");
+}
+function sendText(){
+  const v=$("text").value.trim();if(!v)return;
+  send({t:"text",v});$("text").value="";
+}
+if($("room").value&&$("worker").value)connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<title>AMBIENT</title>
+<style>
+/* ============================================================
+   AMBIENT — instrument-HUD tokens (spec §11)
+   v2 cockpit: center stage + peripheral rails + overview zoom
+   ============================================================ */
+:root{
+  --bg:#000000;
+  --ink:#E8F4F6;
+  --dim:#7E9296;
+  --faint:#313D40;
+  --accent:#4FD4E8;
+  --accent-soft:rgba(79,212,232,.14);
+  --up:#3EE08C;
+  --down:#FF5C5C;
+  --warn:#FFB454;
+  --mono:ui-monospace,'SF Mono','Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);overflow:hidden;
+  -webkit-user-select:none;user-select:none}
+#app{height:100%;display:flex;flex-direction:column;padding:12px 20px 8px}
+/* status strip */
+#status{display:flex;align-items:baseline;gap:14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  color:var(--dim);padding-bottom:8px;border-bottom:1px solid var(--faint)}
+#status .app-name{color:var(--accent);font-weight:600}
+#status .sep{color:var(--faint)}
+#status .right{margin-left:auto;display:flex;gap:14px}
+#net.off{color:var(--warn)}
+/* ---------- cockpit ---------- */
+#cockpit{flex:1;display:grid;gap:16px;padding:14px 0 8px;min-height:0;
+  grid-template-columns:minmax(180px,240px) 1fr minmax(180px,240px)}
+.rail{display:flex;flex-direction:column;gap:12px;min-height:0;
+  overflow:hidden;justify-content:center}
+#stage-wrap{min-height:0;display:flex}
+/* stage card */
+#stage{position:relative;flex:1;border:1px solid var(--accent);
+  border-radius:3px;padding:18px 22px 16px;overflow-y:auto;
+  scrollbar-width:none;
+  box-shadow:0 0 0 1px var(--accent),0 0 26px -8px var(--accent)}
+#stage::-webkit-scrollbar{display:none}
+#stage h2{font-family:var(--mono);font-size:11px;font-weight:500;
+  letter-spacing:.2em;color:var(--accent);margin-bottom:14px}
+#stage::before,#stage::after{content:"";position:absolute;width:9px;
+  height:9px;border-color:var(--accent);border-style:solid}
+#stage::before{top:-1px;left:-1px;border-width:1px 0 0 1px}
+#stage::after{bottom:-1px;right:-1px;border-width:0 1px 1px 0}
+/* rail tiles */
+.tile{position:relative;border:1px solid var(--faint);border-radius:3px;
+  padding:10px 13px;overflow:hidden}
+.tile h3{font-family:var(--mono);font-size:9px;font-weight:500;
+  letter-spacing:.16em;color:var(--dim);margin-bottom:6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .tbody{font-size:13px;color:var(--dim);line-height:1.45;
+  max-height:74px;overflow:hidden}
+.tile .tbody .val{color:var(--ink)}
+.tile.sel{border-color:var(--accent);background:var(--accent-soft)}
+.tile.sel h3{color:var(--accent)}
+.tile.off{opacity:.32}
+/* overview mode */
+#cockpit.overview{grid-template-columns:1fr}
+#cockpit.overview #stage-wrap,{display:none}
+#overview{display:none;flex:1;min-height:0;align-content:center}
+#cockpit.overview #overview{display:grid;gap:14px;
+  grid-template-columns:repeat(3,1fr)}
+#cockpit.overview .rail,#cockpit.overview #stage-wrap{display:none}
+#overview .tile .tbody{max-height:110px}
+/* ---------- shared data typography ---------- */
+.big{font-family:var(--mono);font-size:52px;font-weight:300;
+  letter-spacing:-.01em;line-height:1}
+.med{font-family:var(--mono);font-size:22px;font-weight:400}
+.lbl{font-size:12px;color:var(--dim)}
+.unit{font-size:.45em;color:var(--dim);font-weight:400}
+.dual{display:flex;gap:28px;justify-content:space-between}
+.dual>div{flex:1;min-width:0}
+.dual>div+div{border-left:1px solid var(--faint);padding-left:24px}
+.row{display:flex;justify-content:space-between;align-items:baseline;
+  padding:6px 0;border-bottom:1px dotted var(--faint);gap:10px}
+.row:last-child{border-bottom:none}
+.row .val{font-family:var(--mono);font-size:16px}
+.delta-up{color:var(--up)}.delta-down{color:var(--down)}
+.state{color:var(--dim);font-size:13px;line-height:1.6}
+.state b{color:var(--warn);font-weight:500}
+.hl{padding:8px 0;border-bottom:1px dotted var(--faint);font-size:15px;
+  line-height:1.45}
+.hl:last-child{border-bottom:none}
+.hl .src{font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  color:var(--dim);display:block;margin-top:2px}
+.hl.sel{color:var(--accent)}
+input[type=text]{width:100%;background:transparent;color:var(--ink);
+  border:1px solid var(--faint);border-radius:2px;padding:7px 9px;
+  font-family:var(--mono);font-size:13px;outline:none}
+input[type=text]:focus{border-color:var(--accent)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.chip{font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  padding:4px 11px;border:1px solid var(--faint);border-radius:2px;
+  color:var(--dim)}
+.chip.on{color:var(--accent);border-color:var(--accent);
+  background:var(--accent-soft)}
+.arc .face{stroke:var(--faint);fill:none}
+.arc .hand{stroke:var(--accent);fill:none;stroke-linecap:round}
+/* key hints */
+#hints{display:flex;gap:18px;justify-content:center;padding-top:8px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  color:var(--faint)}
+#hints b{color:var(--dim);font-weight:500}
+/* narrow fallback (phone preview) */
+@media(max-width:760px){
+  #cockpit{grid-template-columns:1fr}
+  .rail{flex-direction:row;justify-content:flex-start}
+  .rail .tile{min-width:150px}
+  #rail-right{display:none}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="status">
+    <span class="app-name">AMBIENT</span>
+    <span class="sep">/</span><span id="st-card">clock</span>
+    <span class="right">
+      <span id="st-link" style="color:var(--accent)"></span>
+      <span id="st-audio" style="color:var(--accent)"></span>
+      <span id="st-theme">day-cyan</span>
+      <span id="net">ONLINE</span>
+      <span id="st-ver"></span>
+    </span>
+  </div>
+  <div id="cockpit">
+    <div class="rail" id="rail-left"></div>
+    <div id="stage-wrap"><section id="stage">
+      <h2 id="stage-title"></h2><div class="body" id="stage-body"></div>
+    </section></div>
+    <div class="rail" id="rail-right"></div>
+    <div id="overview"></div>
+  </div>
+  <div id="hints">
+    <span><b>◄ ►</b> cycle</span><span><b>▲ ▼</b> inside</span>
+    <span><b>OK</b> act</span><span><b>BACK</b> overview</span>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+   AMBIENT v2 — cockpit shell (built for a large worn display)
+   Everything visible at once: peripheral rails + one dominant
+   stage. BACK zooms to an overview grid of all cards.
+   Cards unchanged from the §3 contract; renderCompact() is the
+   one optional addition (rail/overview tile view).
+   ============================================================ */
+const APP_VERSION="v5";
+
+/* ---------------- theme bus ---------------- */
+const THEMES={
+  "day-cyan":     {accent:"#4FD4E8",soft:"rgba(79,212,232,.14)"},
+  "dim-amber":    {accent:"#FFB454",soft:"rgba(255,180,84,.12)"},
+  "sea":          {accent:"#3FBFA8",soft:"rgba(63,191,168,.13)"},
+  "high-contrast":{accent:"#FFFFFF",soft:"rgba(255,255,255,.16)"}
+};
+let themeName=localStorage.getItem("ambient.theme")||"day-cyan";
+function applyTheme(name){
+  if(!THEMES[name])name="day-cyan";
+  themeName=name;
+  const t=THEMES[name];
+  document.documentElement.style.setProperty("--accent",t.accent);
+  document.documentElement.style.setProperty("--accent-soft",t.soft);
+  localStorage.setItem("ambient.theme",name);
+  const el=document.getElementById("st-theme");if(el)el.textContent=name;
+  CARDS.forEach(c=>{try{c.onTheme&&c.onTheme(ctxFor(c),name)}catch(e){}});
+}
+
+/* ---------------- audio bus (spec §8) ----------------
+   ONE audio pipeline for the whole app. Any card plays through it;
+   the visualizer reads it without knowing the source.
+   CORS-clean streams get a real AnalyserNode; others play natively
+   (routing a non-CORS stream through WebAudio would MUTE it) and
+   the analyser abstraction returns synthetic motion instead.     */
+const audioBus=(()=>{
+  const el=(typeof Audio!=="undefined")?new Audio():null;
+  let ac=null,analyser=null,wired=false,current=null,synthT=0;
+  function wire(){ /* once, only for cors-clean sources */
+    if(wired||!el)return;
+    try{
+      ac=new (window.AudioContext||window.webkitAudioContext)();
+      const src=ac.createMediaElementSource(el);
+      analyser=ac.createAnalyser();analyser.fftSize=128;
+      src.connect(analyser);analyser.connect(ac.destination);
+      wired=true;
+    }catch(e){analyser=null}
+  }
+  return{
+    play(item){ /* {label,url,cors} */
+      if(!el)return false;
+      try{
+        if(item.cors){el.crossOrigin="anonymous";wire();
+          if(ac&&ac.state==="suspended")ac.resume()}
+        else el.crossOrigin=null;
+        el.src=item.url;
+        const p=el.play();if(p&&p.catch)p.catch(()=>{});
+        current=item;emit("audio",{state:"play",item});
+        return true;
+      }catch(e){return false}
+    },
+    stop(){if(el){try{el.pause();el.src=""}catch(e){}}
+      current=null;emit("audio",{state:"stop"})},
+    toggle(item){
+      if(current&&item&&current.url===item.url){this.stop();return false}
+      return this.play(item);
+    },
+    current:()=>current,
+    playing:()=>!!(current&&el&&!el.paused),
+    /* fills arr 0..1; returns true if real FFT, false if synthetic */
+    getLevels(arr){
+      if(current&&wired&&analyser&&current.cors){
+        try{
+          const raw=new Uint8Array(analyser.frequencyBinCount);
+          analyser.getByteFrequencyData(raw);
+          let sum=0;
+          for(let i=0;i<arr.length;i++){
+            const v=(raw[Math.floor(i*raw.length/arr.length)]||0)/255;
+            arr[i]=v;sum+=v;
+          }
+          if(sum>0.01)return true; /* real signal present */
+        }catch(e){}
+      }
+      /* synthetic: gentle breathing when playing, near-still when idle */
+      synthT+=0.045;
+      const amp=this.playing()?0.55:0.12;
+      for(let i=0;i<arr.length;i++)
+        arr[i]=amp*(0.35+0.65*Math.abs(Math.sin(synthT+i*0.55))*
+          (0.6+0.4*Math.sin(synthT*0.31+i)));
+      return false;
+    }
+  };
+})();
+
+
+/* ---------------- scenes (spec §5) ----------------
+   A scene = palette + which cards are active + which card takes
+   the stage + optional per-card config (delivered via onScene).
+   Built-ins below; user scenes merge from localStorage now and
+   from /AMBIENT/scenes/ once the bridge lands (step 5).        */
+const SCENES=[
+  {id:"all",name:"ALL PANELS",palette:"day-cyan",stage:"clock",cards:{}},
+  {id:"morning",name:"MORNING",palette:"day-cyan",stage:"clock",
+    cards:{vis:{active:false}}},
+  {id:"flight",name:"FLIGHT",palette:"dim-amber",stage:"vis",
+    cards:{radio:{active:false},markets:{active:false},
+      headlines:{config:{offlineBatch:true}}}},
+  {id:"evening",name:"EVENING",palette:"sea",stage:"radio",
+    cards:{markets:{active:false},headlines:{active:false},
+      weather:{active:false}}}
+];
+function allScenes(){
+  let user=[];
+  try{user=JSON.parse(localStorage.getItem("ambient.scenes")||"[]")}
+  catch(e){}
+  return SCENES.concat(Array.isArray(user)?user:[]);
+}
+let currentScene=localStorage.getItem("ambient.scene")||"all";
+function applyScene(sc){
+  if(!sc)return;
+  currentScene=sc.id;
+  localStorage.setItem("ambient.scene",sc.id);
+  applyTheme(sc.palette||"day-cyan");
+  CARDS.forEach(c=>{
+    const cfg=(sc.cards&&sc.cards[c.id])||{};
+    c._active=cfg.active!==false||c.id==="scenes";
+    try{c.onScene&&c.onScene(ctxFor(c),cfg.config||{})}catch(e){}
+  });
+  const act=activeCards();
+  const si=Math.max(0,act.findIndex(c=>c.id===sc.stage));
+  centerIdx=si;mode="stage";
+  render();
+}
+
+const WORKER_BASE=()=>localStorage.getItem("ambient.worker")||"";
+const cacheGet=k=>{try{const v=localStorage.getItem("ambient.data."+k);
+  return v?JSON.parse(v):null}catch(e){return null}};
+const cachePut=(k,d)=>{try{localStorage.setItem("ambient.data."+k,
+  JSON.stringify({t:Date.now(),d}))}catch(e){}};
+async function fetchSource(card,src){
+  let url;
+  if(src.origin==="direct")url=src.path;
+  else if(src.origin==="worker"){
+    const base=WORKER_BASE();
+    if(!base)throw new Error("no-worker");
+    url=base.replace(/\/$/,"")+src.path;
+  }else if(src.origin==="local"){
+    url="http://localhost:8765"+src.path;
+  }else throw new Error("unknown-origin");
+  const r=await fetch(url,{signal:AbortSignal.timeout?
+    AbortSignal.timeout(12000):undefined});
+  if(!r.ok)throw new Error("http-"+r.status);
+  const d=await r.json();
+  cachePut(src.key,d);
+  return d;
+}
+
+/* ---------------- companion link (spec §10) ----------------
+   Phone pairs by 5-char room code over a WebSocket relay on the
+   Worker (/ws?room=CODE&role=display|remote). Phone input flows
+   through the same route() as the D-pad; nothing card-specific. */
+const companion=(()=>{
+  let ws=null,state="off",retry=null;
+  let code=localStorage.getItem("ambient.room");
+  if(!code){code=Array.from({length:5},()=>
+    "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random()*31)])
+    .join("");localStorage.setItem("ambient.room",code)}
+  function setState(v){state=v;
+    const el=document.getElementById("st-link");
+    if(el)el.textContent=v==="on"?"LINK "+code:"";
+    emit("companion",{state:v,code});}
+  function handle(msg){
+    let m;try{m=JSON.parse(msg)}catch(e){return}
+    if(m.t==="key"&&["up","down","left","right","enter","back"]
+      .includes(m.k))route(m.k);
+    else if(m.t==="text"){
+      const c=ring(centerIdx);
+      if(c.onText){try{c.onText(ctxFor(c),String(m.v||""))}catch(e){}}
+    }
+    else if(m.t==="action"){
+      const v=String(m.id||"");
+      if(v.startsWith("scene."))
+        applyScene(allScenes().find(x=>x.id===v.slice(6)));
+      else if(v.startsWith("theme."))applyTheme(v.slice(6));
+      else if(v.startsWith("stage.")){
+        const i=activeCards().findIndex(c=>c.id===v.slice(6));
+        if(i>=0){centerIdx=i;mode="stage";render()}
+      }
+    }
+    else if(m.t==="inject"){
+      const target=CARDS.find(c=>c.id===(m.target||""))||
+        CARDS.find(c=>(c.accepts||[]).includes(m.kind));
+      if(target&&target.onInject)
+        try{target.onInject(ctxFor(target),
+          {kind:m.kind,v:m.v})}catch(e){}
+    }
+  }
+  function connect(){
+    const base=WORKER_BASE();
+    if(!base||typeof WebSocket==="undefined"){setState("off");return}
+    try{
+      const url=base.replace(/^http/,"ws").replace(/\/$/,"")+
+        "/ws?room="+code+"&role=display";
+      ws=new WebSocket(url);
+      ws.onopen=()=>setState("on");
+      ws.onmessage=e=>handle(e.data);
+      ws.onclose=()=>{setState("off");
+        clearTimeout(retry);retry=setTimeout(connect,5000)};
+      ws.onerror=()=>{try{ws.close()}catch(e){}};
+    }catch(e){setState("off")}
+  }
+  return{connect,code:()=>code,state:()=>state};
+})();
+
+/* ---------------- shell state ---------------- */
+let CARDS=[];
+let centerIdx=0;            /* which card holds the stage */
+let mode="stage";           /* "stage" | "overview" */
+let ovSel=0;                /* overview selection */
+let online=navigator.onLine;
+const bus={};
+function emit(ev,p){(bus[ev]||[]).forEach(f=>{try{f(p)}catch(e){}})}
+function on(ev,f){(bus[ev]=bus[ev]||[]).push(f)}
+
+function ctxFor(card){
+  return{
+    fetch:async key=>{
+      const src=(card.sources||[]).find(s=>s.key===key);
+      if(!src)throw new Error("undeclared-source:"+key);
+      const cached=cacheGet(key);
+      if(!online){if(cached)return cached.d;throw new Error("offline")}
+      try{return await fetchSource(card,src)}
+      catch(e){if(cached)return cached.d;throw e}
+    },
+    cachedOnly:key=>{const c=cacheGet(key);return c?c.d:null},
+    online:()=>online,
+    caps:()=>({dpad:true,keyboard:true,pointer:false,
+      companion:companion.state()==="on"}),
+    theme:()=>themeName,setTheme:applyTheme,
+    audio:audioBus,
+    storage:{
+      get:(k,dflt)=>{try{const v=localStorage.getItem(
+        "ambient.card."+card.id+"."+k);
+        return v===null?dflt:JSON.parse(v)}catch(e){return dflt}},
+      set:(k,v)=>{try{localStorage.setItem(
+        "ambient.card."+card.id+"."+k,JSON.stringify(v))}catch(e){}}
+    },
+    emit,on,
+    rerender:()=>renderCard(card)
+  };
+}
+
+/* ---------------- registry ---------------- */
+function registerCards(list){
+  CARDS=list.filter(c=>{
+    const ok=c&&c.id&&c.pane&&typeof c.render==="function";
+    if(!ok)console.warn("AMBIENT: card rejected",c&&c.id);
+    return ok;
+  }).sort((a,b)=>(a.order||99)-(b.order||99));
+  CARDS.forEach(c=>{try{c.init&&c.init(ctxFor(c))}catch(e){
+    console.warn("init fail",c.id,e)}});
+}
+function activeCards(){return CARDS.filter(c=>c._active!==false)}
+const ring=i=>{const a=activeCards();
+  return a[((i%a.length)+a.length)%a.length]};
+
+/* ---------------- render: cockpit ---------------- */
+function tileHTML(card,sel,tag){
+  return "<div class='tile"+(sel?" sel":"")+"' id='"+tag+"-"+card.id+
+    "'><h3>"+(card.title||card.id)+"</h3><div class='tbody'>"+
+    compactOf(card)+"</div></div>";
+}
+function compactOf(card){
+  try{
+    if(card.renderCompact)
+      return card.renderCompact(ctxFor(card),card._data||{})||"";
+    return "<span class='lbl'>—</span>";
+  }catch(e){return "<span class='lbl'>—</span>"}
+}
+function render(){
+  document.getElementById("st-ver").textContent=APP_VERSION;
+  const cp=document.getElementById("cockpit");
+  const center=ring(centerIdx);
+  document.getElementById("st-card").textContent=
+    center.pane+" / "+center.id;
+  if(mode==="overview"){
+    cp.classList.add("overview");
+    const ov=document.getElementById("overview");
+    ov.innerHTML=CARDS.map((c,i)=>{
+      const t=tileHTML(c,i===ovSel,"ov");
+      return c._active===false?
+        t.replace("class='tile","class='tile off"):t;
+    }).join("");
+  }else{
+    cp.classList.remove("overview");
+    /* rails: previous cards left, next cards right, ring order */
+    const others=activeCards().length-1;
+    const left=[],right=[];
+    for(let k=1;k<=others;k++){
+      const c=ring(centerIdx+k);
+      (k<=Math.ceil(others/2)?right:left).push(c);
+    }
+    left.reverse();
+    document.getElementById("rail-left").innerHTML=
+      left.map(c=>tileHTML(c,false,"tl")).join("");
+    document.getElementById("rail-right").innerHTML=
+      right.map(c=>tileHTML(c,false,"tr")).join("");
+    document.getElementById("stage-title").textContent=
+      center.title||center.id;
+    renderCard(center);
+  }
+}
+function renderCard(card){
+  /* stage body if this card holds the stage */
+  if(mode==="stage"&&ring(centerIdx).id===card.id){
+    const host=document.getElementById("stage-body");
+    try{
+      const out=card.render(ctxFor(card),card._data||{});
+      if(typeof out==="string")host.innerHTML=out;
+      else if(out instanceof Node){host.innerHTML="";host.appendChild(out)}
+    }catch(e){host.innerHTML="<div class='state'>render error</div>";
+      console.warn("render fail",card.id,e)}
+  }
+  /* refresh this card's tile wherever it appears */
+  ["tl","tr","ov"].forEach(tag=>{
+    const t=document.querySelector("#"+tag+"-"+card.id+" .tbody");
+    if(t)t.innerHTML=compactOf(card);
+  });
+}
+
+/* ---------------- refresh scheduler ---------------- */
+async function refreshCard(card,force){
+  if(!card.sources||!card.sources.length)return;
+  const due=force||!card._last||
+    (card.refresh&&(Date.now()-card._last)/1000>=card.refresh);
+  if(!due)return;
+  card._last=Date.now()+Math.floor(Math.random()*4000);
+  const data={};
+  await Promise.all(card.sources.map(async s=>{
+    try{data[s.key]=await ctxFor(card).fetch(s.key)}
+    catch(e){data[s.key]=null;data[s.key+".err"]=e.message}
+  }));
+  card._data=data;
+  renderCard(card);
+}
+/* cockpit shows every card at once — all cards stay on cadence */
+setInterval(()=>{CARDS.forEach(c=>refreshCard(c,false))},5000);
+
+/* ---------------- online state ---------------- */
+function setOnline(v){
+  online=v;
+  const el=document.getElementById("net");
+  el.textContent=v?"ONLINE":"OFFLINE";
+  el.className=v?"":"off";
+  if(v)CARDS.forEach(c=>refreshCard(c,true));
+  else render();
+}
+addEventListener("online",()=>setOnline(true));
+addEventListener("offline",()=>setOnline(false));
+
+/* ---------------- input router ----------------
+   stage: ◄► rotate stage · ▲▼/OK inside card · BACK overview
+   overview: arrows select · OK zoom in · BACK cancel        */
+addEventListener("keydown",e=>{
+  if(e.target&&e.target.tagName==="INPUT"){
+    if(e.key==="Escape"||e.key==="GoBack"){e.target.blur();e.preventDefault()}
+    return;
+  }
+  const map={ArrowLeft:"left",ArrowRight:"right",ArrowUp:"up",
+    ArrowDown:"down",Enter:"enter",Escape:"back",Backspace:"back",
+    GoBack:"back",BrowserBack:"back"};
+  const k=map[e.key];if(!k)return;
+  e.preventDefault();
+  route(k);
+});
+function route(k){
+  if(mode==="overview"){
+    const cols=3,n=CARDS.length;
+    if(k==="left"&&ovSel>0)ovSel--;
+    else if(k==="right"&&ovSel<n-1)ovSel++;
+    else if(k==="up"&&ovSel-cols>=0)ovSel-=cols;
+    else if(k==="down"&&ovSel+cols<n)ovSel+=cols;
+    else if(k==="enter"){
+      const card=CARDS[ovSel];
+      if(card._active===false)card._active=true; /* ad-hoc reactivate */
+      const ai=activeCards().findIndex(c=>c.id===card.id);
+      centerIdx=ai<0?0:ai;mode="stage";
+    }
+    else if(k==="back")mode="stage";
+    render();return;
+  }
+  const center=ring(centerIdx);
+  if(k==="up"||k==="down"||k==="enter"){
+    if(center.onKey){
+      let consumed=false;
+      try{consumed=center.onKey(ctxFor(center),k)===true}catch(e){}
+      if(consumed)return;
+    }
+    return;
+  }
+  if(k==="left"){centerIdx--;render()}
+  else if(k==="right"){centerIdx++;render()}
+  else if(k==="back"){mode="overview";
+    const cur=ring(centerIdx);
+    ovSel=Math.max(0,CARDS.findIndex(c=>c.id===cur.id));render()}
+}
+
+/* ============================================================
+   CARDS — §3 contract + optional renderCompact() (tile view)
+   ============================================================ */
+
+/* ---- clock-dual ---- */
+const cardClock={
+  id:"clock",title:"LOCAL TIME — EDMONTON · PORTO CHELI",icon:"clock",
+  pane:"dashboard",size:"large",order:10,refresh:null,offline:"cached",
+  zones:[{name:"EDMONTON",tz:"America/Edmonton"},
+         {name:"PORTO CHELI",tz:"Europe/Athens"}],
+  init(ctx){setInterval(()=>ctx.rerender(),1000)},
+  _parts(tz){
+    const now=new Date();
+    const fmt=new Intl.DateTimeFormat("en-GB",{timeZone:tz,
+      hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+    const p={};fmt.formatToParts(now).forEach(x=>p[x.type]=x.value);
+    p.date=new Intl.DateTimeFormat("en-GB",{timeZone:tz,
+      weekday:"short",day:"numeric",month:"short"}).format(now);
+    return p;
+  },
+  render(){
+    return "<div class='dual'>"+this.zones.map(z=>{
+      const p=this._parts(z.tz);
+      const h=+p.hour,night=h<7||h>=21;
+      const sec=+p.second,r=15,c=2*Math.PI*r,off=c-(sec/60)*c;
+      return "<div><div class='lbl'>"+z.name+
+        (night?" · night":" · day")+"</div>"+
+        "<div style='display:flex;align-items:center;gap:14px'>"+
+        "<span class='big'>"+p.hour+":"+p.minute+"</span>"+
+        "<svg class='arc' width='40' height='40' viewBox='0 0 36 36'>"+
+        "<circle class='face' cx='18' cy='18' r='"+r+"' stroke-width='1'/>"+
+        "<circle class='hand' cx='18' cy='18' r='"+r+"' stroke-width='2' "+
+        "stroke-dasharray='"+c.toFixed(1)+"' stroke-dashoffset='"+
+        off.toFixed(1)+"' transform='rotate(-90 18 18)'/></svg></div>"+
+        "<div class='lbl'>"+p.date+"</div></div>";
+    }).join("")+"</div>";
+  },
+  renderCompact(){
+    return this.zones.map(z=>{
+      const p=this._parts(z.tz);
+      return "<span class='val'>"+p.hour+":"+p.minute+"</span> "+
+        "<span class='lbl'>"+z.name.slice(0,3)+"</span>";
+    }).join("<br>");
+  }
+};
+
+/* ---- weather-dual ---- */
+const WMO={0:"clear",1:"mostly clear",2:"partly cloudy",3:"overcast",
+  45:"fog",48:"rime fog",51:"drizzle",53:"drizzle",55:"drizzle",
+  61:"rain",63:"rain",65:"heavy rain",66:"freezing rain",67:"freezing rain",
+  71:"snow",73:"snow",75:"heavy snow",77:"snow grains",80:"showers",
+  81:"showers",82:"heavy showers",85:"snow showers",86:"snow showers",
+  95:"thunderstorm",96:"thunderstorm",99:"thunderstorm"};
+function meteoURL(lat,lon){return "https://api.open-meteo.com/v1/forecast"+
+  "?latitude="+lat+"&longitude="+lon+
+  "&current=temperature_2m,weather_code,wind_speed_10m"+
+  "&daily=temperature_2m_max,temperature_2m_min&timezone=auto"}
+const cardWeather={
+  id:"weather",title:"WEATHER",icon:"cloud",
+  pane:"dashboard",size:"large",order:20,refresh:900,offline:"cached",
+  sources:[
+    {key:"wx.edm",origin:"direct",path:meteoURL(53.5461,-113.4938)},
+    {key:"wx.pc", origin:"direct",path:meteoURL(37.3273,23.1478)}
+  ],
+  _get(ctx,data,key){return (data&&data[key])||ctx.cachedOnly(key)},
+  render(ctx,data){
+    const spot=(key,name)=>{
+      const d=this._get(ctx,data,key);
+      if(!d)return "<div><div class='lbl'>"+name+
+        "</div><div class='state'>awaiting data…</div></div>";
+      const cur=d.current,day=d.daily;
+      return "<div><div class='lbl'>"+name+"</div>"+
+        "<span class='big'>"+Math.round(cur.temperature_2m)+
+        "<span class='unit'>°C</span></span>"+
+        "<div class='lbl'>"+(WMO[cur.weather_code]||"—")+
+        " · "+Math.round(day.temperature_2m_min[0])+"° / "+
+        Math.round(day.temperature_2m_max[0])+"° · wind "+
+        Math.round(cur.wind_speed_10m)+"</div></div>";
+    };
+    return "<div class='dual'>"+spot("wx.edm","EDMONTON")+
+      spot("wx.pc","PORTO CHELI")+"</div>";
+  },
+  renderCompact(ctx,data){
+    const t=(key,tag)=>{
+      const d=this._get(ctx,data,key);
+      return d?"<span class='val'>"+Math.round(d.current.temperature_2m)+
+        "°</span> <span class='lbl'>"+tag+"</span>":"";
+    };
+    return (t("wx.edm","EDM")+"<br>"+t("wx.pc","PCH"))||
+      "<span class='lbl'>—</span>";
+  }
+};
+
+/* ---- markets ---- */
+const cardMarkets={
+  id:"markets",title:"MARKETS",icon:"chart",
+  pane:"dashboard",size:"medium",order:30,refresh:300,offline:"cached",
+  sources:[
+    {key:"fx",origin:"direct",path:"https://open.er-api.com/v6/latest/CAD"},
+    {key:"crypto",origin:"direct",path:
+      "https://api.coingecko.com/api/v3/simple/price"+
+      "?ids=bitcoin,ethereum&vs_currencies=cad&include_24hr_change=true"}
+  ],
+  render(ctx,data){
+    const fx=(data&&data.fx)||ctx.cachedOnly("fx");
+    const cr=(data&&data.crypto)||ctx.cachedOnly("crypto");
+    let rows="";
+    if(fx&&fx.rates){
+      rows+="<div class='row'><span class='lbl'>CAD → EUR</span>"+
+        "<span class='val'>"+fx.rates.EUR.toFixed(4)+"</span></div>"+
+        "<div class='row'><span class='lbl'>CAD → USD</span>"+
+        "<span class='val'>"+fx.rates.USD.toFixed(4)+"</span></div>";
+    }
+    if(cr&&cr.bitcoin){
+      const coin=(id,sym)=>{
+        const c=cr[id],ch=c.cad_24h_change||0;
+        return "<div class='row'><span class='lbl'>"+sym+
+          " <span class='"+(ch>=0?"delta-up":"delta-down")+"'>"+
+          (ch>=0?"▲":"▼")+Math.abs(ch).toFixed(1)+"%</span></span>"+
+          "<span class='val'>$"+Math.round(c.cad).toLocaleString()+
+          "</span></div>";
+      };
+      rows+=coin("bitcoin","BTC")+coin("ethereum","ETH");
+    }
+    return rows||"<div class='state'>awaiting data…</div>";
+  },
+  renderCompact(ctx,data){
+    const fx=(data&&data.fx)||ctx.cachedOnly("fx");
+    const cr=(data&&data.crypto)||ctx.cachedOnly("crypto");
+    const a=fx&&fx.rates?"<span class='val'>"+fx.rates.EUR.toFixed(3)+
+      "</span> <span class='lbl'>EUR</span>":"";
+    const b=cr&&cr.bitcoin?"<span class='val'>$"+
+      Math.round(cr.bitcoin.cad/1000)+"k</span> "+
+      "<span class='lbl'>BTC</span>":"";
+    return (a&&b)?a+"<br>"+b:(a||b||"<span class='lbl'>—</span>");
+  }
+};
+
+/* ---- headlines ---- */
+const cardHeadlines={
+  id:"headlines",title:"HEADLINES",icon:"news",
+  pane:"news",size:"large",order:40,refresh:600,offline:"cached",
+  sources:[{key:"news",origin:"worker",path:"/feeds"}],
+  sel:0,
+  _items(ctx,data){
+    const d=(data&&data.news)||ctx.cachedOnly("news");
+    if(!d)return null;
+    return (Array.isArray(d)?d:d.items||[]).slice(0,12);
+  },
+  render(ctx,data){
+    const items=this._items(ctx,data);
+    if(!items){
+      if(!WORKER_BASE())return "<div class='state'>"+
+        "No feed relay configured. Set your <b>Cloudflare Worker URL</b> "+
+        "in the system card. Its <span class='val'>/feeds</span> endpoint "+
+        "should return <span class='val'>[{title,source,link}]</span>.</div>";
+      return "<div class='state'>awaiting feed relay…"+
+        (data&&data["news.err"]?" ("+data["news.err"]+")":"")+"</div>";
+    }
+    return items.map((it,i)=>"<div class='hl"+
+      (i===this.sel?" sel":"")+"'>"+esc(it.title)+
+      "<span class='src'>"+esc(it.source||"")+"</span></div>").join("")||
+      "<div class='state'>feed empty</div>";
+  },
+  renderCompact(ctx,data){
+    const items=this._items(ctx,data);
+    if(!items||!items.length)return "<span class='lbl'>no feed</span>";
+    return esc(items[0].title);
+  },
+  onKey(ctx,k){
+    const items=this._items(ctx,null);if(!items)return false;
+    if(k==="down"&&this.sel<items.length-1){this.sel++;ctx.rerender();
+      return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    return false;
+  }
+};
+function esc(s){return String(s||"").replace(/[<>&]/g,
+  c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}
+
+/* ---- radio: built-in CORS-clean presets + live Greek stations ----
+   Presets marked cors:true are known to allow WebAudio analysis
+   (real visualizer). Fetched stations default cors:false → they
+   still play; visualizer runs synthetic. Station list becomes
+   microSD-editable (/AMBIENT/radio/) at build step 5.            */
+const RADIO_PRESETS=[
+  {label:"RADIO PARADISE",url:"https://stream.radioparadise.com/aac-320",
+    cors:true,region:"eclectic"},
+  {label:"GROOVE SALAD · SOMAFM",
+    url:"https://ice1.somafm.com/groovesalad-256-mp3",
+    cors:true,region:"ambient"},
+  {label:"DEEP SPACE ONE · SOMAFM",
+    url:"https://ice1.somafm.com/deepspaceone-128-mp3",
+    cors:true,region:"space"}
+];
+const cardRadio={
+  id:"radio",title:"RADIO",icon:"radio",
+  pane:"listen",size:"large",order:50,refresh:3600,offline:"local-first",
+  sources:[{key:"radio.gr",origin:"direct",path:
+    "https://de1.api.radio-browser.info/json/stations/bycountry/greece"+
+    "?limit=8&order=votes&reverse=true&hidebroken=true"}],
+  sel:0,
+  _list(ctx,data){
+    const gr=((data&&data["radio.gr"])||ctx.cachedOnly("radio.gr")||[])
+      .filter(s=>s&&s.url_resolved)
+      .map(s=>({label:(s.name||"").trim().toUpperCase().slice(0,28),
+        url:s.url_resolved,cors:false,region:"greece"}));
+    return RADIO_PRESETS.concat(gr);
+  },
+  render(ctx,data){
+    const list=this._list(ctx,data);
+    const cur=ctx.audio.current();
+    return list.map((st,i)=>{
+      const now=cur&&cur.url===st.url;
+      return "<div class='row"+(i===this.sel?" hl sel":"")+"'>"+
+        "<span class='"+(i===this.sel?"":"lbl")+"'>"+
+        (now?"▶ ":"")+esc(st.label)+"</span>"+
+        "<span class='lbl'>"+st.region+"</span></div>";
+    }).join("")+
+    "<div class='state' style='margin-top:10px'>"+
+    (cur?"playing — OK on station stops/switches":
+      "▲▼ choose · OK play")+"</div>";
+  },
+  renderCompact(ctx){
+    const cur=ctx.audio.current();
+    return cur?"<span class='val'>▶ "+esc(cur.label)+"</span>":
+      "<span class='lbl'>idle</span>";
+  },
+  onKey(ctx,k){
+    const list=this._list(ctx,this._data);
+    if(k==="down"&&this.sel<list.length-1){this.sel++;ctx.rerender();
+      return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"&&list[this.sel]){
+      ctx.audio.toggle(list[this.sel]);
+      render(); /* now-playing shows on radio + visualizer tiles */
+      return true;
+    }
+    return false;
+  }
+};
+
+/* ---- visualizer: canvas styles over the shared analyser ----
+   Style registry mirrors the whole system's philosophy (§8):
+   each style = {id,draw(ctx2d,w,h,levels,accent)}. OK cycles.  */
+const VIS_STYLES=[
+  {id:"bars",draw(g,w,h,lv,ac){
+    const n=lv.length,bw=w/n;
+    g.fillStyle=ac;
+    for(let i=0;i<n;i++){
+      const bh=Math.max(2,lv[i]*h*0.9);
+      g.globalAlpha=0.35+0.65*lv[i];
+      g.fillRect(i*bw+1,h-bh,bw-2,bh);
+    }
+    g.globalAlpha=1;
+  }},
+  {id:"pulse",draw(g,w,h,lv,ac){
+    const cx=w/2,cy=h/2;
+    const avg=lv.reduce((a,b)=>a+b,0)/lv.length;
+    g.strokeStyle=ac;
+    for(let ring=0;ring<4;ring++){
+      const r=(0.15+ring*0.2+avg*0.25)*Math.min(w,h)/2;
+      g.globalAlpha=0.15+0.5*lv[(ring*7)%lv.length];
+      g.lineWidth=1+2*avg;
+      g.beginPath();g.arc(cx,cy,r,0,2*Math.PI);g.stroke();
+    }
+    g.globalAlpha=1;
+  }},
+  {id:"scope",draw(g,w,h,lv,ac){
+    g.strokeStyle=ac;g.lineWidth=1.5;g.globalAlpha=0.9;
+    g.beginPath();
+    for(let i=0;i<lv.length;i++){
+      const x=i/(lv.length-1)*w;
+      const y=h/2+(lv[i]-0.4)*h*0.7*(i%2?1:-1);
+      i?g.lineTo(x,y):g.moveTo(x,y);
+    }
+    g.stroke();g.globalAlpha=1;
+  }}
+];
+const cardVis={
+  id:"vis",title:"VISUALIZER",icon:"wave",
+  pane:"listen",size:"large",order:55,refresh:null,offline:"cached",
+  styleIdx:0,_raf:null,_levels:new Float32Array(32),
+  init(ctx){
+    this.styleIdx=ctx.storage.get("style",0)%VIS_STYLES.length;
+    const loop=()=>{
+      this._draw(ctx);
+      this._raf=(window.requestAnimationFrame||
+        (f=>setTimeout(f,50)))(loop);
+    };
+    loop();
+  },
+  _draw(ctx){
+    const cv=document.getElementById("vis-cv");
+    if(!cv)return;
+    let g=null;try{g=cv.getContext&&cv.getContext("2d")}catch(e){}
+    if(!g)return;
+    const w=cv.width=cv.clientWidth||600;
+    const h=cv.height=cv.clientHeight||220;
+    g.clearRect(0,0,w,h);
+    const real=ctx.audio.getLevels(this._levels);
+    const accent=getComputedStyle(document.documentElement)
+      .getPropertyValue("--accent").trim()||"#4FD4E8";
+    VIS_STYLES[this.styleIdx].draw(g,w,h,this._levels,accent);
+    const tag=document.getElementById("vis-tag");
+    if(tag)tag.textContent=VIS_STYLES[this.styleIdx].id+
+      (ctx.audio.playing()?(real?" · live fft":" · synthetic"):" · idle");
+  },
+  render(ctx){
+    const cur=ctx.audio.current();
+    return "<canvas id='vis-cv' style='width:100%;height:230px;"+
+      "display:block'></canvas>"+
+      "<div class='state' style='display:flex;justify-content:"+
+      "space-between;margin-top:8px'><span id='vis-tag'>"+
+      VIS_STYLES[this.styleIdx].id+"</span><span>"+
+      (cur?esc(cur.label):"no audio — OK cycles style")+"</span></div>";
+  },
+  renderCompact(ctx){
+    return "<span class='val'>"+VIS_STYLES[this.styleIdx].id+"</span> "+
+      "<span class='lbl'>"+(ctx.audio.playing()?"live":"idle")+"</span>";
+  },
+  onKey(ctx,k){
+    if(k==="enter"){
+      this.styleIdx=(this.styleIdx+1)%VIS_STYLES.length;
+      ctx.storage.set("style",this.styleIdx);
+      ctx.rerender();return true;
+    }
+    return false;
+  }
+};
+
+
+/* ---- claude: assistant chat — see it big, hear it spoken ----
+   Input arrives from the phone companion (primary) or the TV
+   keyboard field. Requests go to YOUR Worker's /claude endpoint,
+   which holds the Anthropic API key as a secret — the key never
+   exists client-side. Replies render on the glasses and are
+   spoken via speechSynthesis when voice is on (OK toggles).    */
+const cardClaude={
+  id:"claude",title:"CLAUDE",icon:"chat",
+  pane:"assist",size:"large",order:45,refresh:null,offline:"live-only",
+  accepts:["chat"],
+  msgs:[],busy:false,voice:true,scroll:0,
+  init(ctx){this.voice=ctx.storage.get("voice",true);
+    this.msgs=ctx.storage.get("msgs",[])},
+  _speak(text){
+    if(!this.voice)return;
+    try{
+      if(typeof speechSynthesis==="undefined")return;
+      speechSynthesis.cancel();
+      const u=new SpeechSynthesisUtterance(text.slice(0,600));
+      speechSynthesis.speak(u);
+    }catch(e){}
+  },
+  async _send(ctx,text){
+    text=String(text||"").trim();
+    if(!text||this.busy)return;
+    if(!WORKER_BASE()){ctx.rerender();return}
+    this.msgs.push({role:"user",content:text});
+    this.busy=true;this.scroll=0;ctx.rerender();
+    try{
+      const r=await fetch(WORKER_BASE().replace(/\/$/,"")+"/claude",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({messages:this.msgs.slice(-12)})});
+      if(!r.ok)throw new Error("http-"+r.status);
+      const d=await r.json();
+      const reply=(d&&d.reply)||"(empty reply)";
+      this.msgs.push({role:"assistant",content:reply});
+      this._speak(reply);
+    }catch(e){
+      this.msgs.push({role:"assistant",
+        content:"⚠ relay error — "+e.message});
+    }
+    this.busy=false;
+    this.msgs=this.msgs.slice(-20);
+    ctx.storage.set("msgs",this.msgs);
+    ctx.rerender();
+  },
+  onText(ctx,v){this._send(ctx,v)},
+  onInject(ctx,item){if(item.kind==="chat")this._send(ctx,item.v)},
+  render(ctx){
+    if(!WORKER_BASE())
+      return "<div class='state'>Claude needs your <b>Worker URL</b> "+
+        "(system card). The Worker's <span class='val'>/claude</span> "+
+        "endpoint holds your Anthropic API key server-side.</div>";
+    const shown=this.msgs.slice(-(6+this.scroll),
+      this.msgs.length-this.scroll||undefined);
+    const log=shown.map(m=>{
+      const me=m.role==="user";
+      return "<div class='hl' style='border-left:2px solid "+
+        (me?"var(--faint)":"var(--accent)")+";padding-left:10px'>"+
+        "<span class='src'>"+(me?"YOU":"CLAUDE")+"</span>"+
+        esc(m.content)+"</div>";
+    }).join("")||"<div class='state'>Ask from the paired phone "+
+      "(room "+esc(companion.code())+") or type below.</div>";
+    return log+
+      (this.busy?"<div class='state'>thinking…</div>":"")+
+      "<input type='text' id='claude-in' placeholder='ask claude…' "+
+      "style='margin-top:10px'>"+
+      "<div class='state' style='margin-top:6px'>voice "+
+      (this.voice?"ON":"OFF")+" — OK toggles · ▲▼ scroll · link "+
+      (companion.state()==="on"?"●":"○")+" "+esc(companion.code())+
+      "</div>";
+  },
+  renderCompact(ctx){
+    const last=this.msgs[this.msgs.length-1];
+    return last?esc(String(last.content).slice(0,60)):
+      "<span class='lbl'>ready · "+esc(companion.code())+"</span>";
+  },
+  onKey(ctx,k){
+    if(k==="enter"){this.voice=!this.voice;
+      ctx.storage.set("voice",this.voice);
+      if(!this.voice&&typeof speechSynthesis!=="undefined")
+        {try{speechSynthesis.cancel()}catch(e){}}
+      ctx.rerender();return true}
+    if(k==="up"&&this.scroll<Math.max(0,this.msgs.length-6))
+      {this.scroll++;ctx.rerender();return true}
+    if(k==="down"&&this.scroll>0){this.scroll--;ctx.rerender();
+      return true}
+    return false;
+  }
+};
+
+/* ---- scenes: apply a saved composition (spec §5) ---- */
+const cardScenes={
+  id:"scenes",title:"SCENES",icon:"layers",
+  pane:"system",size:"medium",order:80,refresh:null,offline:"cached",
+  sel:0,
+  render(ctx){
+    const list=allScenes();
+    return list.map((sc,i)=>{
+      const on=sc.id===currentScene;
+      return "<div class='row"+(i===this.sel?" hl sel":"")+"'>"+
+        "<span class='"+(i===this.sel?"":"lbl")+"'>"+
+        (on?"● ":"")+esc(sc.name)+"</span>"+
+        "<span class='lbl'>"+esc(sc.palette||"")+"</span></div>";
+    }).join("")+
+    "<div class='state' style='margin-top:10px'>▲▼ choose · OK apply"+
+    "<br>overview: OK on a dimmed panel re-adds it</div>";
+  },
+  renderCompact(){
+    const sc=allScenes().find(s=>s.id===currentScene);
+    return "<span class='val'>"+esc(sc?sc.name:"—")+"</span>";
+  },
+  onKey(ctx,k){
+    const list=allScenes();
+    if(k==="down"&&this.sel<list.length-1){this.sel++;ctx.rerender();
+      return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"){applyScene(list[this.sel]);return true}
+    return false;
+  }
+};
+
+const cardSystem={
+  id:"system",title:"SYSTEM",icon:"gear",
+  pane:"system",size:"large",order:90,refresh:null,offline:"cached",
+  render(ctx){
+    const chips=Object.keys(THEMES).map(n=>"<span class='chip"+
+      (n===ctx.theme()?" on":"")+"'>"+n+"</span>").join("");
+    return "<div class='lbl'>palette — OK cycles</div>"+
+      "<div class='chips'>"+chips+"</div>"+
+      "<div class='lbl' style='margin-top:16px'>feed relay "+
+      "(Cloudflare Worker URL)</div>"+
+      "<input type='text' id='worker-in' value='"+esc(WORKER_BASE())+
+      "' placeholder='https://your-worker.workers.dev'>"+
+      "<div class='lbl' style='margin-top:14px'>"+APP_VERSION+
+      " · cards "+CARDS.length+"</div>";
+  },
+  renderCompact(ctx){
+    return "<span class='val'>"+ctx.theme()+"</span><br>"+
+      "<span class='lbl'>"+APP_VERSION+" · "+CARDS.length+" cards</span>";
+  },
+  onKey(ctx,k){
+    if(k==="enter"){
+      const names=Object.keys(THEMES);
+      const next=names[(names.indexOf(ctx.theme())+1)%names.length];
+      ctx.setTheme(next);render();return true;
+    }
+    return false;
+  },
+  init(ctx){
+    document.addEventListener("change",e=>{
+      if(e.target&&e.target.id==="worker-in"){
+        localStorage.setItem("ambient.worker",e.target.value.trim());
+        CARDS.forEach(c=>refreshCard(c,true));
+      }
+    });
+  }
+};
+
+/* ---------------- boot ---------------- */
+registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
+  cardClaude,cardRadio,cardVis,cardScenes,cardSystem]);
+document.addEventListener("change",e=>{
+  if(e.target&&e.target.id==="claude-in"&&e.target.value.trim()){
+    const v=e.target.value.trim();e.target.value="";
+    cardClaude._send(ctxFor(cardClaude),v);
+  }
+});
+applyScene(allScenes().find(sc=>sc.id===currentScene)||SCENES[0]);
+setOnline(navigator.onLine);
+companion.connect();
+on("companion",()=>{const c=ring(centerIdx);
+  if(c&&c.id==="claude")renderCard(c)});
+on("audio",p=>{
+  const el=document.getElementById("st-audio");
+  if(el)el.textContent=(p.state==="play"&&p.item)?
+    "♪ "+p.item.label:"";
+});
+render();
+CARDS.forEach(c=>refreshCard(c,true));
+
+if("serviceWorker" in navigator)
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
