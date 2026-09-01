@@ -30,20 +30,25 @@
 html,body{height:100%;background:var(--bg);color:var(--ink);
   font-family:var(--sans);overflow:hidden;
   -webkit-user-select:none;user-select:none}
-#app{height:100%;display:flex;flex-direction:column;padding:12px 20px 8px}
-/* status strip */
-#status{display:flex;align-items:baseline;gap:14px;
-  font-family:var(--mono);font-size:11px;letter-spacing:.08em;
-  color:var(--dim);padding-bottom:8px;border-bottom:1px solid var(--faint)}
-#status .app-name{color:var(--accent);font-weight:600}
-#status .sep{color:var(--faint)}
-#status .right{margin-left:auto;display:flex;gap:14px}
+#app{height:100%;display:flex;flex-direction:column;padding:12px}
 #net.off{color:var(--warn)}
 /* ---------- cockpit ---------- */
-#cockpit{flex:1;display:grid;gap:16px;padding:14px 0 8px;min-height:0;
-  grid-template-columns:minmax(180px,240px) 1fr minmax(180px,240px)}
-.rail{display:flex;flex-direction:column;gap:12px;min-height:0;
-  overflow:hidden;justify-content:center}
+/* full instrument bezel: squares on all four sides of the stage */
+:root{--tile:clamp(118px,15.2vh,176px)}
+/* 100-inch bezel: 6 across top (corner+4+corner), 4 down each side,
+   6 across bottom. Widescreen rows spread edge-to-edge; the stage
+   takes whatever remains in the middle. */
+#cockpit{flex:1;display:grid;gap:14px;min-height:0;
+  grid-template-areas:"t t t" "l s r" "b b b";
+  grid-template-rows:var(--tile) 1fr var(--tile);
+  grid-template-columns:var(--tile) 1fr var(--tile)}
+#rail-top{grid-area:t}#rail-bottom{grid-area:b}
+#rail-left{grid-area:l}#rail-right{grid-area:r}
+#stage-wrap{grid-area:s}
+.rail{display:flex;min-height:0;min-width:0;overflow:hidden;
+  justify-content:space-between;align-items:center}
+.rail-h{flex-direction:row}
+.rail-v{flex-direction:column}
 #stage-wrap{min-height:0;display:flex}
 /* stage card */
 #stage{position:relative;flex:1;border:1px solid var(--accent);
@@ -52,19 +57,36 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
   box-shadow:0 0 0 1px var(--accent),0 0 26px -8px var(--accent)}
 #stage::-webkit-scrollbar{display:none}
 #stage h2{font-family:var(--mono);font-size:11px;font-weight:500;
-  letter-spacing:.2em;color:var(--accent);margin-bottom:14px}
+  letter-spacing:.2em;color:var(--accent);margin-bottom:14px;
+  display:flex;justify-content:space-between;gap:12px}
+#stage-status{display:flex;gap:14px;color:var(--dim);
+  letter-spacing:.08em;font-weight:400}
+#stage-status span:empty{display:none}
+#st-link,#st-audio{color:var(--accent)}
 #stage::before,#stage::after{content:"";position:absolute;width:9px;
   height:9px;border-color:var(--accent);border-style:solid}
 #stage::before{top:-1px;left:-1px;border-width:1px 0 0 1px}
 #stage::after{bottom:-1px;right:-1px;border-width:0 1px 1px 0}
 /* rail tiles */
 .tile{position:relative;border:1px solid var(--faint);border-radius:3px;
-  padding:10px 13px;overflow:hidden}
+  padding:8px 10px;overflow:hidden;width:var(--tile);height:var(--tile);
+  flex:none;display:flex;flex-direction:column}
+.tile.filler{border-style:dashed;opacity:.45}
+.clk-row{display:flex;align-items:center;gap:9px}
+.clk-mid{flex:1;min-width:0}
+.clk-t{font-family:var(--mono);font-size:21px;font-weight:300;
+  color:var(--ink);line-height:1.05}
+.clk-c{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;
+  color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.tile.filler .tbody{align-items:center;justify-content:center;
+  color:var(--faint);font-size:16px;letter-spacing:.3em}
 .tile h3{font-family:var(--mono);font-size:9px;font-weight:500;
-  letter-spacing:.16em;color:var(--dim);margin-bottom:6px;
+  letter-spacing:.15em;color:var(--dim);margin-bottom:6px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tile .tbody{font-size:13px;color:var(--dim);line-height:1.45;
-  max-height:74px;overflow:hidden}
+.tile .tbody{font-size:12.5px;color:var(--dim);line-height:1.5;
+  flex:1;display:flex;flex-direction:column;justify-content:center;
+  overflow:hidden}
 .tile .tbody .val{color:var(--ink)}
 .tile.sel{border-color:var(--accent);background:var(--accent-soft)}
 .tile.sel h3{color:var(--accent)}
@@ -74,12 +96,15 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 #cockpit.overview #stage-wrap,{display:none}
 #overview{display:none;flex:1;min-height:0;align-content:center}
 #cockpit.overview #overview{display:grid;gap:14px;
-  grid-template-columns:repeat(3,1fr)}
+  grid-template-columns:repeat(auto-fill,150px);justify-content:center;
+  align-content:center}
 #cockpit.overview .rail,#cockpit.overview #stage-wrap{display:none}
-#overview .tile .tbody{max-height:110px}
+#overview .tile{width:150px;height:150px}
 /* ---------- shared data typography ---------- */
-.big{font-family:var(--mono);font-size:52px;font-weight:300;
+.big{font-family:var(--mono);font-size:38px;font-weight:300;
   letter-spacing:-.01em;line-height:1}
+.date-line{font-size:14px;color:var(--ink);margin-top:6px;
+  letter-spacing:.04em}
 .med{font-family:var(--mono);font-size:22px;font-weight:400}
 .lbl{font-size:12px;color:var(--dim)}
 .unit{font-size:.45em;color:var(--dim);font-weight:400}
@@ -111,44 +136,27 @@ input[type=text]:focus{border-color:var(--accent)}
   background:var(--accent-soft)}
 .arc .face{stroke:var(--faint);fill:none}
 .arc .hand{stroke:var(--accent);fill:none;stroke-linecap:round}
-/* key hints */
-#hints{display:flex;gap:18px;justify-content:center;padding-top:8px;
-  font-family:var(--mono);font-size:10px;letter-spacing:.1em;
-  color:var(--faint)}
-#hints b{color:var(--dim);font-weight:500}
 /* narrow fallback (phone preview) */
 @media(max-width:760px){
-  #cockpit{grid-template-columns:1fr}
-  .rail{flex-direction:row;justify-content:flex-start}
-  .rail .tile{min-width:150px}
-  #rail-right{display:none}
+  :root{--tile:64px}
+  #rail-left,#rail-right{display:none}
 }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="status">
-    <span class="app-name">AMBIENT</span>
-    <span class="sep">/</span><span id="st-card">clock</span>
-    <span class="right">
-      <span id="st-link" style="color:var(--accent)"></span>
-      <span id="st-audio" style="color:var(--accent)"></span>
-      <span id="st-theme">day-cyan</span>
-      <span id="net">ONLINE</span>
-      <span id="st-ver"></span>
-    </span>
-  </div>
   <div id="cockpit">
-    <div class="rail" id="rail-left"></div>
+    <div class="rail rail-h" id="rail-top"></div>
+    <div class="rail rail-v" id="rail-left"></div>
     <div id="stage-wrap"><section id="stage">
-      <h2 id="stage-title"></h2><div class="body" id="stage-body"></div>
+      <h2><span id="stage-title"></span><span id="stage-status">
+        <span id="st-link"></span><span id="st-audio"></span>
+        <span id="net"></span></span></h2>
+      <div class="body" id="stage-body"></div>
     </section></div>
-    <div class="rail" id="rail-right"></div>
+    <div class="rail rail-v" id="rail-right"></div>
+    <div class="rail rail-h" id="rail-bottom"></div>
     <div id="overview"></div>
-  </div>
-  <div id="hints">
-    <span><b>◄ ►</b> cycle</span><span><b>▲ ▼</b> inside</span>
-    <span><b>OK</b> act</span><span><b>BACK</b> overview</span>
   </div>
 </div>
 
@@ -161,7 +169,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v5";
+const APP_VERSION="v10";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -178,7 +186,6 @@ function applyTheme(name){
   document.documentElement.style.setProperty("--accent",t.accent);
   document.documentElement.style.setProperty("--accent-soft",t.soft);
   localStorage.setItem("ambient.theme",name);
-  const el=document.getElementById("st-theme");if(el)el.textContent=name;
   CARDS.forEach(c=>{try{c.onTheme&&c.onTheme(ctxFor(c),name)}catch(e){}});
 }
 
@@ -254,8 +261,8 @@ const audioBus=(()=>{
    Built-ins below; user scenes merge from localStorage now and
    from /AMBIENT/scenes/ once the bridge lands (step 5).        */
 const SCENES=[
-  {id:"all",name:"ALL PANELS",palette:"day-cyan",stage:"clock",cards:{}},
-  {id:"morning",name:"MORNING",palette:"day-cyan",stage:"clock",
+  {id:"all",name:"ALL PANELS",palette:"day-cyan",stage:"weather",cards:{}},
+  {id:"morning",name:"MORNING",palette:"day-cyan",stage:"weather",
     cards:{vis:{active:false}}},
   {id:"flight",name:"FLIGHT",palette:"dim-amber",stage:"vis",
     cards:{radio:{active:false},markets:{active:false},
@@ -278,10 +285,10 @@ function applyScene(sc){
   applyTheme(sc.palette||"day-cyan");
   CARDS.forEach(c=>{
     const cfg=(sc.cards&&sc.cards[c.id])||{};
-    c._active=cfg.active!==false||c.id==="scenes";
+    c._active=cfg.active!==false||c.id==="scenes"||c.pinned===true;
     try{c.onScene&&c.onScene(ctxFor(c),cfg.config||{})}catch(e){}
   });
-  const act=activeCards();
+  const act=ringCards();
   const si=Math.max(0,act.findIndex(c=>c.id===sc.stage));
   centerIdx=si;mode="stage";
   render();
@@ -338,7 +345,7 @@ const companion=(()=>{
         applyScene(allScenes().find(x=>x.id===v.slice(6)));
       else if(v.startsWith("theme."))applyTheme(v.slice(6));
       else if(v.startsWith("stage.")){
-        const i=activeCards().findIndex(c=>c.id===v.slice(6));
+        const i=ringCards().findIndex(c=>c.id===v.slice(6));
         if(i>=0){centerIdx=i;mode="stage";render()}
       }
     }
@@ -416,7 +423,12 @@ function registerCards(list){
     console.warn("init fail",c.id,e)}});
 }
 function activeCards(){return CARDS.filter(c=>c._active!==false)}
-const ring=i=>{const a=activeCards();
+/* ring = rotatable cards only; pinned cards live in fixed frame slots */
+function ringCards(){return activeCards().filter(c=>!c.pinned)}
+function pinnedCards(){return activeCards().filter(c=>c.pinned)}
+/* visible = overview set (pinned are always on screen already) */
+function visibleCards(){return CARDS.filter(c=>!c.pinned)}
+const ring=i=>{const a=ringCards();
   return a[((i%a.length)+a.length)%a.length]};
 
 /* ---------------- render: cockpit ---------------- */
@@ -432,34 +444,41 @@ function compactOf(card){
     return "<span class='lbl'>—</span>";
   }catch(e){return "<span class='lbl'>—</span>"}
 }
+const FRAME_SLOTS=20; /* squares around the stage: 7 top, 3 right,
+                         7 bottom, 3 left — clockwise carousel */
+function fillerHTML(n){
+  return "<div class='tile filler'><h3>·</h3>"+
+    "<div class='tbody'>· · ·</div></div>";
+}
 function render(){
-  document.getElementById("st-ver").textContent=APP_VERSION;
   const cp=document.getElementById("cockpit");
   const center=ring(centerIdx);
-  document.getElementById("st-card").textContent=
-    center.pane+" / "+center.id;
   if(mode==="overview"){
     cp.classList.add("overview");
     const ov=document.getElementById("overview");
-    ov.innerHTML=CARDS.map((c,i)=>{
+    ov.innerHTML=visibleCards().map((c,i)=>{
       const t=tileHTML(c,i===ovSel,"ov");
       return c._active===false?
         t.replace("class='tile","class='tile off"):t;
     }).join("");
   }else{
     cp.classList.remove("overview");
-    /* rails: previous cards left, next cards right, ring order */
-    const others=activeCards().length-1;
-    const left=[],right=[];
-    for(let k=1;k<=others;k++){
-      const c=ring(centerIdx+k);
-      (k<=Math.ceil(others/2)?right:left).push(c);
-    }
-    left.reverse();
-    document.getElementById("rail-left").innerHTML=
-      left.map(c=>tileHTML(c,false,"tl")).join("");
-    document.getElementById("rail-right").innerHTML=
-      right.map(c=>tileHTML(c,false,"tr")).join("");
+    /* frame: pinned cards anchor from the top-left corner, then the
+       ring clockwise, then fillers. 6 top / 4 right / 6 bottom / 4 left. */
+    const slots=pinnedCards().map(c=>tileHTML(c,false,"fr"));
+    const rc=ringCards();
+    for(let k=1;k<rc.length;k++)slots.push(tileHTML(ring(centerIdx+k),
+      false,"fr"));
+    while(slots.length<FRAME_SLOTS)slots.push(fillerHTML(slots.length));
+    slots.length=FRAME_SLOTS;
+    const top=slots.slice(0,6);
+    const right=slots.slice(6,10);
+    const bottom=slots.slice(10,16).reverse();
+    const left=slots.slice(16,20).reverse();
+    document.getElementById("rail-top").innerHTML=top.join("");
+    document.getElementById("rail-right").innerHTML=right.join("");
+    document.getElementById("rail-bottom").innerHTML=bottom.join("");
+    document.getElementById("rail-left").innerHTML=left.join("");
     document.getElementById("stage-title").textContent=
       center.title||center.id;
     renderCard(center);
@@ -477,7 +496,7 @@ function renderCard(card){
       console.warn("render fail",card.id,e)}
   }
   /* refresh this card's tile wherever it appears */
-  ["tl","tr","ov"].forEach(tag=>{
+  ["fr","ov"].forEach(tag=>{
     const t=document.querySelector("#"+tag+"-"+card.id+" .tbody");
     if(t)t.innerHTML=compactOf(card);
   });
@@ -505,7 +524,7 @@ setInterval(()=>{CARDS.forEach(c=>refreshCard(c,false))},5000);
 function setOnline(v){
   online=v;
   const el=document.getElementById("net");
-  el.textContent=v?"ONLINE":"OFFLINE";
+  el.textContent=v?"":"OFFLINE";
   el.className=v?"":"off";
   if(v)CARDS.forEach(c=>refreshCard(c,true));
   else render();
@@ -530,15 +549,16 @@ addEventListener("keydown",e=>{
 });
 function route(k){
   if(mode==="overview"){
-    const cols=3,n=CARDS.length;
+    const cols=3,n=visibleCards().length;
     if(k==="left"&&ovSel>0)ovSel--;
     else if(k==="right"&&ovSel<n-1)ovSel++;
     else if(k==="up"&&ovSel-cols>=0)ovSel-=cols;
     else if(k==="down"&&ovSel+cols<n)ovSel+=cols;
     else if(k==="enter"){
-      const card=CARDS[ovSel];
+      const card=visibleCards()[ovSel];
+      if(!card)return;
       if(card._active===false)card._active=true; /* ad-hoc reactivate */
-      const ai=activeCards().findIndex(c=>c.id===card.id);
+      const ai=ringCards().findIndex(c=>c.id===card.id);
       centerIdx=ai<0?0:ai;mode="stage";
     }
     else if(k==="back")mode="stage";
@@ -557,19 +577,82 @@ function route(k){
   else if(k==="right"){centerIdx++;render()}
   else if(k==="back"){mode="overview";
     const cur=ring(centerIdx);
-    ovSel=Math.max(0,CARDS.findIndex(c=>c.id===cur.id));render()}
+    ovSel=Math.max(0,visibleCards().findIndex(c=>c.id===cur.id));
+    render()}
 }
 
 /* ============================================================
    CARDS — §3 contract + optional renderCompact() (tile view)
    ============================================================ */
 
+/* ---------- semantic color helpers (v7) ----------
+   Color carries INFORMATION: temperature scale, weather condition,
+   trend direction, source identity, day/night. Frame stays quiet. */
+function tempColor(t){
+  return t<=-10?"#6EC1FF":t<=0?"#9AD4F5":t<=10?"#7ED0C0":
+    t<=20?"#9FE06E":t<=27?"#FFC85E":"#FF7A5C";
+}
+function wxIcon(code,size){
+  size=size||30;
+  const P=(body,color)=>"<svg width='"+size+"' height='"+size+
+    "' viewBox='0 0 24 24' fill='none' style='vertical-align:middle'>"+
+    body.replace(/COL/g,color)+"</svg>";
+  const sun="<circle cx='12' cy='12' r='5' fill='COL'/>"+
+    "<g stroke='COL' stroke-width='1.6'>"+
+    "<path d='M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M19.5 4.5l-2 2M6.5 17.5l-2 2'/></g>";
+  const cloud="<path d='M7 18h10a4 4 0 0 0 .8-7.9A5.5 5.5 0 0 0 7.2 9.6 3.8 3.8 0 0 0 7 18z' fill='COL'/>";
+  if(code===0||code===1)return P(sun,"#FFD24A");
+  if(code===2)return P("<g transform='translate(-2,-2) scale(.7)'>"+
+    sun.replace(/COL/g,"#FFD24A")+"</g>"+
+    "<g transform='translate(3,4) scale(.9)'>"+cloud+"</g>","#9FB3B8");
+  if(code===3||code===45||code===48)return P(cloud,"#9FB3B8");
+  if(code>=51&&code<=67||code>=80&&code<=82)
+    return P(cloud+"<g stroke='COL' stroke-width='1.8' stroke-linecap='round'>"+
+      "<path d='M9 20l-1 2M13 20l-1 2M17 20l-1 2'/></g>","#4FA8E8");
+  if(code>=71&&code<=86)
+    return P(cloud.replace(/COL/g,"#B8CDD2")+
+      "<g fill='COL'><circle cx='9' cy='21' r='1.2'/>"+
+      "<circle cx='13' cy='22' r='1.2'/><circle cx='17' cy='21' r='1.2'/>"+
+      "</g>","#EAF6FA");
+  if(code>=95)
+    return P(cloud.replace(/COL/g,"#8A93C8")+
+      "<path d='M12 17l-2.5 4h2l-1 3 4-5h-2l1.5-2z' fill='COL'/>","#FFD24A");
+  return P(cloud,"#9FB3B8");
+}
+function dayNightIcon(night,size){
+  size=size||22;
+  return night?
+    "<svg width='"+size+"' height='"+size+"' viewBox='0 0 24 24' "+
+    "style='vertical-align:middle'><path d='M20 14A8.5 8.5 0 1 1 10 4"+
+    " a7 7 0 0 0 10 10z' fill='#8FB8FF'/></svg>":
+    "<svg width='"+size+"' height='"+size+"' viewBox='0 0 24 24' "+
+    "style='vertical-align:middle'><circle cx='12' cy='12' r='5' "+
+    "fill='#FFD24A'/><g stroke='#FFD24A' stroke-width='1.6'>"+
+    "<path d='M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2"+
+    "M19.5 4.5l-2 2M6.5 17.5l-2 2'/></g></svg>";
+}
+function srcColor(name){
+  let h=0;for(const ch of String(name||""))h=(h*31+ch.charCodeAt(0))%360;
+  return "hsl("+h+" 65% 62%)";
+}
+function sparkline(vals,w,h){
+  if(!vals||vals.length<2)return "";
+  const min=Math.min(...vals),max=Math.max(...vals),span=(max-min)||1;
+  const pts=vals.map((v,i)=>
+    (i/(vals.length-1)*w).toFixed(1)+","+
+    (h-((v-min)/span)*(h-2)-1).toFixed(1)).join(" ");
+  const up=vals[vals.length-1]>=vals[0];
+  return "<svg width='"+w+"' height='"+h+"' style='vertical-align:middle'>"+
+    "<polyline points='"+pts+"' fill='none' stroke='"+
+    (up?"var(--up)":"var(--down)")+"' stroke-width='1.5'/></svg>";
+}
+
 /* ---- clock-dual ---- */
 const cardClock={
-  id:"clock",title:"LOCAL TIME — EDMONTON · PORTO CHELI",icon:"clock",
+  id:"clock",title:"EDMONTON · ATHENS",icon:"clock",pinned:true,
   pane:"dashboard",size:"large",order:10,refresh:null,offline:"cached",
   zones:[{name:"EDMONTON",tz:"America/Edmonton"},
-         {name:"PORTO CHELI",tz:"Europe/Athens"}],
+         {name:"ATHENS",tz:"Europe/Athens"}],
   init(ctx){setInterval(()=>ctx.rerender(),1000)},
   _parts(tz){
     const now=new Date();
@@ -585,24 +668,34 @@ const cardClock={
       const p=this._parts(z.tz);
       const h=+p.hour,night=h<7||h>=21;
       const sec=+p.second,r=15,c=2*Math.PI*r,off=c-(sec/60)*c;
-      return "<div><div class='lbl'>"+z.name+
-        (night?" · night":" · day")+"</div>"+
+      return "<div><div class='lbl'>"+z.name+"</div>"+
         "<div style='display:flex;align-items:center;gap:14px'>"+
+        dayNightIcon(night,26)+
         "<span class='big'>"+p.hour+":"+p.minute+"</span>"+
         "<svg class='arc' width='40' height='40' viewBox='0 0 36 36'>"+
         "<circle class='face' cx='18' cy='18' r='"+r+"' stroke-width='1'/>"+
         "<circle class='hand' cx='18' cy='18' r='"+r+"' stroke-width='2' "+
         "stroke-dasharray='"+c.toFixed(1)+"' stroke-dashoffset='"+
         off.toFixed(1)+"' transform='rotate(-90 18 18)'/></svg></div>"+
-        "<div class='lbl'>"+p.date+"</div></div>";
+        "<div class='date-line'>"+p.date+"</div></div>";
     }).join("")+"</div>";
   },
   renderCompact(){
-    return this.zones.map(z=>{
+    return this.zones.map((z,i)=>{
       const p=this._parts(z.tz);
-      return "<span class='val'>"+p.hour+":"+p.minute+"</span> "+
-        "<span class='lbl'>"+z.name.slice(0,3)+"</span>";
-    }).join("<br>");
+      const h=+p.hour,night=h<7||h>=21;
+      const sec=+p.second,r=9,c=2*Math.PI*r,off=c-(sec/60)*c;
+      return "<div class='clk-row'"+(i?" style='border-top:1px dotted "+
+        "var(--faint);padding-top:7px;margin-top:7px'":"")+">"+
+        dayNightIcon(night,20)+
+        "<div class='clk-mid'><div class='clk-t'>"+p.hour+":"+p.minute+
+        "</div><div class='clk-c'>"+z.name+"</div></div>"+
+        "<svg class='arc' width='24' height='24' viewBox='0 0 24 24'>"+
+        "<circle class='face' cx='12' cy='12' r='"+r+"' stroke-width='1'/>"+
+        "<circle class='hand' cx='12' cy='12' r='"+r+"' stroke-width='1.6' "+
+        "stroke-dasharray='"+c.toFixed(1)+"' stroke-dashoffset='"+
+        off.toFixed(1)+"' transform='rotate(-90 12 12)'/></svg></div>";
+    }).join("");
   }
 };
 
@@ -631,22 +724,31 @@ const cardWeather={
       if(!d)return "<div><div class='lbl'>"+name+
         "</div><div class='state'>awaiting data…</div></div>";
       const cur=d.current,day=d.daily;
+      const t=Math.round(cur.temperature_2m);
+      const lo=Math.round(day.temperature_2m_min[0]),
+            hi=Math.round(day.temperature_2m_max[0]);
       return "<div><div class='lbl'>"+name+"</div>"+
-        "<span class='big'>"+Math.round(cur.temperature_2m)+
-        "<span class='unit'>°C</span></span>"+
-        "<div class='lbl'>"+(WMO[cur.weather_code]||"—")+
-        " · "+Math.round(day.temperature_2m_min[0])+"° / "+
-        Math.round(day.temperature_2m_max[0])+"° · wind "+
-        Math.round(cur.wind_speed_10m)+"</div></div>";
+        "<div style='display:flex;align-items:center;gap:12px'>"+
+        wxIcon(cur.weather_code,34)+
+        "<span class='big' style='color:"+tempColor(t)+"'>"+t+
+        "<span class='unit'>°C</span></span></div>"+
+        "<div class='lbl' style='margin-top:6px'>"+
+        (WMO[cur.weather_code]||"—")+
+        " · <span style='color:"+tempColor(lo)+"'>"+lo+"°</span> / "+
+        "<span style='color:"+tempColor(hi)+"'>"+hi+"°</span>"+
+        " · wind "+Math.round(cur.wind_speed_10m)+"</div></div>";
     };
     return "<div class='dual'>"+spot("wx.edm","EDMONTON")+
-      spot("wx.pc","PORTO CHELI")+"</div>";
+      spot("wx.pc","ATHENS")+"</div>";
   },
   renderCompact(ctx,data){
     const t=(key,tag)=>{
       const d=this._get(ctx,data,key);
-      return d?"<span class='val'>"+Math.round(d.current.temperature_2m)+
-        "°</span> <span class='lbl'>"+tag+"</span>":"";
+      if(!d)return "";
+      const v=Math.round(d.current.temperature_2m);
+      return wxIcon(d.current.weather_code,16)+
+        " <span class='val' style='color:"+tempColor(v)+"'>"+v+
+        "°</span> <span class='lbl'>"+tag+"</span>";
     };
     return (t("wx.edm","EDM")+"<br>"+t("wx.pc","PCH"))||
       "<span class='lbl'>—</span>";
@@ -663,24 +765,38 @@ const cardMarkets={
       "https://api.coingecko.com/api/v3/simple/price"+
       "?ids=bitcoin,ethereum&vs_currencies=cad&include_24hr_change=true"}
   ],
+  _hist(ctx,sym,val){
+    const h=ctx.storage.get("hist",{});
+    const a=h[sym]||[];
+    if(val!=null&&val!==a[a.length-1]){a.push(val);
+      h[sym]=a.slice(-24);ctx.storage.set("hist",h)}
+    return h[sym]||[];
+  },
   render(ctx,data){
     const fx=(data&&data.fx)||ctx.cachedOnly("fx");
     const cr=(data&&data.crypto)||ctx.cachedOnly("crypto");
     let rows="";
     if(fx&&fx.rates){
-      rows+="<div class='row'><span class='lbl'>CAD → EUR</span>"+
-        "<span class='val'>"+fx.rates.EUR.toFixed(4)+"</span></div>"+
-        "<div class='row'><span class='lbl'>CAD → USD</span>"+
-        "<span class='val'>"+fx.rates.USD.toFixed(4)+"</span></div>";
+      const fxrow=(sym,v,dec)=>{
+        const hist=this._hist(ctx,sym,v);
+        return "<div class='row'><span class='lbl'>"+sym+"</span>"+
+          "<span>"+sparkline(hist,64,16)+" <span class='val'>"+
+          v.toFixed(dec)+"</span></span></div>";
+      };
+      rows+=fxrow("CAD → EUR",fx.rates.EUR,4)+
+            fxrow("CAD → USD",fx.rates.USD,4);
     }
     if(cr&&cr.bitcoin){
       const coin=(id,sym)=>{
         const c=cr[id],ch=c.cad_24h_change||0;
+        const hist=this._hist(ctx,sym,c.cad);
         return "<div class='row'><span class='lbl'>"+sym+
           " <span class='"+(ch>=0?"delta-up":"delta-down")+"'>"+
           (ch>=0?"▲":"▼")+Math.abs(ch).toFixed(1)+"%</span></span>"+
-          "<span class='val'>$"+Math.round(c.cad).toLocaleString()+
-          "</span></div>";
+          "<span>"+sparkline(hist,64,16)+
+          " <span class='val' style='color:"+
+          (ch>=0?"var(--up)":"var(--down)")+"'>$"+
+          Math.round(c.cad).toLocaleString()+"</span></span></div>";
       };
       rows+=coin("bitcoin","BTC")+coin("ethereum","ETH");
     }
@@ -719,15 +835,21 @@ const cardHeadlines={
       return "<div class='state'>awaiting feed relay…"+
         (data&&data["news.err"]?" ("+data["news.err"]+")":"")+"</div>";
     }
-    return items.map((it,i)=>"<div class='hl"+
-      (i===this.sel?" sel":"")+"'>"+esc(it.title)+
-      "<span class='src'>"+esc(it.source||"")+"</span></div>").join("")||
-      "<div class='state'>feed empty</div>";
+    return items.map((it,i)=>{
+      const c=srcColor(it.source);
+      return "<div class='hl"+(i===this.sel?" sel":"")+
+        "' style='border-left:3px solid "+c+";padding-left:10px'>"+
+        esc(it.title)+
+        "<span class='src' style='color:"+c+"'>"+
+        esc(it.source||"")+"</span></div>";
+    }).join("")||"<div class='state'>feed empty</div>";
   },
   renderCompact(ctx,data){
     const items=this._items(ctx,data);
     if(!items||!items.length)return "<span class='lbl'>no feed</span>";
-    return esc(items[0].title);
+    return "<span style='border-left:3px solid "+
+      srcColor(items[0].source)+";padding-left:7px;display:block'>"+
+      esc(items[0].title)+"</span>";
   },
   onKey(ctx,k){
     const items=this._items(ctx,null);if(!items)return false;
@@ -774,10 +896,13 @@ const cardRadio={
     const cur=ctx.audio.current();
     return list.map((st,i)=>{
       const now=cur&&cur.url===st.url;
+      const rc=srcColor(st.region);
       return "<div class='row"+(i===this.sel?" hl sel":"")+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+
-        (now?"▶ ":"")+esc(st.label)+"</span>"+
-        "<span class='lbl'>"+st.region+"</span></div>";
+        (now?"<span style='color:var(--up)'>▶ </span>":"")+
+        esc(st.label)+"</span>"+
+        "<span style='color:"+rc+";font-size:12px'>"+st.region+
+        "</span></div>";
     }).join("")+
     "<div class='state' style='margin-top:10px'>"+
     (cur?"playing — OK on station stops/switches":
@@ -806,37 +931,41 @@ const cardRadio={
    Style registry mirrors the whole system's philosophy (§8):
    each style = {id,draw(ctx2d,w,h,levels,accent)}. OK cycles.  */
 const VIS_STYLES=[
-  {id:"bars",draw(g,w,h,lv,ac){
+  {id:"bars",draw(g,w,h,lv){
+    /* frequency → hue: low=magenta through cyan to high=amber */
     const n=lv.length,bw=w/n;
-    g.fillStyle=ac;
     for(let i=0;i<n;i++){
       const bh=Math.max(2,lv[i]*h*0.9);
-      g.globalAlpha=0.35+0.65*lv[i];
+      const hue=300-(i/n)*260;
+      g.fillStyle="hsl("+hue+" 85% "+(45+lv[i]*25)+"%)";
+      g.globalAlpha=0.4+0.6*lv[i];
       g.fillRect(i*bw+1,h-bh,bw-2,bh);
     }
     g.globalAlpha=1;
   }},
-  {id:"pulse",draw(g,w,h,lv,ac){
+  {id:"pulse",draw(g,w,h,lv){
     const cx=w/2,cy=h/2;
     const avg=lv.reduce((a,b)=>a+b,0)/lv.length;
-    g.strokeStyle=ac;
-    for(let ring=0;ring<4;ring++){
-      const r=(0.15+ring*0.2+avg*0.25)*Math.min(w,h)/2;
-      g.globalAlpha=0.15+0.5*lv[(ring*7)%lv.length];
-      g.lineWidth=1+2*avg;
+    for(let ring=0;ring<5;ring++){
+      const v=lv[(ring*6)%lv.length];
+      const r=(0.12+ring*0.17+avg*0.25)*Math.min(w,h)/2;
+      g.strokeStyle="hsl("+(190+ring*38)+" 85% "+(50+v*20)+"%)";
+      g.globalAlpha=0.2+0.6*v;
+      g.lineWidth=1+3*v;
       g.beginPath();g.arc(cx,cy,r,0,2*Math.PI);g.stroke();
     }
     g.globalAlpha=1;
   }},
-  {id:"scope",draw(g,w,h,lv,ac){
-    g.strokeStyle=ac;g.lineWidth=1.5;g.globalAlpha=0.9;
-    g.beginPath();
-    for(let i=0;i<lv.length;i++){
-      const x=i/(lv.length-1)*w;
-      const y=h/2+(lv[i]-0.4)*h*0.7*(i%2?1:-1);
-      i?g.lineTo(x,y):g.moveTo(x,y);
+  {id:"scope",draw(g,w,h,lv){
+    for(let i=1;i<lv.length;i++){
+      const x0=(i-1)/(lv.length-1)*w,x1=i/(lv.length-1)*w;
+      const y0=h/2+(lv[i-1]-0.4)*h*0.7*((i-1)%2?1:-1);
+      const y1=h/2+(lv[i]-0.4)*h*0.7*(i%2?1:-1);
+      g.strokeStyle="hsl("+(300-(i/lv.length)*260)+" 85% 58%)";
+      g.globalAlpha=0.9;g.lineWidth=1.5;
+      g.beginPath();g.moveTo(x0,y0);g.lineTo(x1,y1);g.stroke();
     }
-    g.stroke();g.globalAlpha=1;
+    g.globalAlpha=1;
   }}
 ];
 const cardVis={
@@ -861,9 +990,7 @@ const cardVis={
     const h=cv.height=cv.clientHeight||220;
     g.clearRect(0,0,w,h);
     const real=ctx.audio.getLevels(this._levels);
-    const accent=getComputedStyle(document.documentElement)
-      .getPropertyValue("--accent").trim()||"#4FD4E8";
-    VIS_STYLES[this.styleIdx].draw(g,w,h,this._levels,accent);
+    VIS_STYLES[this.styleIdx].draw(g,w,h,this._levels);
     const tag=document.getElementById("vis-tag");
     if(tag)tag.textContent=VIS_STYLES[this.styleIdx].id+
       (ctx.audio.playing()?(real?" · live fft":" · synthetic"):" · idle");
@@ -1027,7 +1154,10 @@ const cardSystem={
       "<input type='text' id='worker-in' value='"+esc(WORKER_BASE())+
       "' placeholder='https://your-worker.workers.dev'>"+
       "<div class='lbl' style='margin-top:14px'>"+APP_VERSION+
-      " · cards "+CARDS.length+"</div>";
+      " · cards "+CARDS.length+" · "+(online?"online":"offline")+
+      " · room "+esc(companion.code())+"</div>"+
+      "<div class='state' style='margin-top:10px'>◄ ► cycle stage · "+
+      "▲ ▼ / OK inside card · BACK overview</div>";
   },
   renderCompact(ctx){
     return "<span class='val'>"+ctx.theme()+"</span><br>"+
