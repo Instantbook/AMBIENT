@@ -1,0 +1,6 @@
+# Build output — regenerate with: bash app/build.sh
+app/build/
+
+# Signing keys never belong in the repo
+*.keystore
+*.jks
