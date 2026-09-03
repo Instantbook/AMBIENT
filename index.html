@@ -189,7 +189,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v19";
+const APP_VERSION="v20";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -218,6 +218,15 @@ function applyTheme(name){
 const audioBus=(()=>{
   const el=(typeof Audio!=="undefined")?new Audio():null;
   let ac=null,analyser=null,wired=false,current=null,synthT=0;
+  /* a stream that will not start must say so — mixed-content blocking and
+     dead stations both fail as a silently rejected play() promise */
+  let failedUrl=null;
+  function fail(item){
+    if(!item||current!==item)return;
+    failedUrl=item.url;current=null;
+    emit("audio",{state:"error",item});
+  }
+  if(el)el.addEventListener("error",()=>fail(current));
   function wire(){ /* once, only for cors-clean sources */
     if(wired||!el)return;
     try{
@@ -235,12 +244,16 @@ const audioBus=(()=>{
         if(item.cors){el.crossOrigin="anonymous";wire();
           if(ac&&ac.state==="suspended")ac.resume()}
         else el.crossOrigin=null;
+        failedUrl=null;
         el.src=item.url;
-        const p=el.play();if(p&&p.catch)p.catch(()=>{});
-        current=item;emit("audio",{state:"play",item});
+        current=item;
+        const p=el.play();
+        if(p&&p.catch)p.catch(()=>fail(item));
+        emit("audio",{state:"play",item});
         return true;
       }catch(e){return false}
     },
+    failed:()=>failedUrl,
     stop(){if(el){try{el.pause();el.src=""}catch(e){}}
       current=null;emit("audio",{state:"stop"})},
     toggle(item){
@@ -478,6 +491,43 @@ function staged(){
 }
 function selectedCard(){return frameCards()[selIdx]}
 function stagedIs(card){const s=staged();return !!s&&s.id===card.id}
+/* Spatial navigation.
+   A strict clockwise ring is correct on the top edge and reads as inverted
+   everywhere else: continuing clockwise along the bottom means travelling
+   visually LEFT, and up the left rail means travelling UP — so ► appeared
+   to go left and ◄ to go right. Arrows now follow screen geometry, which is
+   what every TV UI does and what the eye expects on a four-sided bezel. */
+function tileCentre(c){
+  const el=c&&document.getElementById("fr-"+c.id);
+  if(!el)return null;
+  const r=el.getBoundingClientRect();
+  if(!r.width&&!r.height)return null;      /* hidden, e.g. fullscreen */
+  return{x:r.left+r.width/2,y:r.top+r.height/2};
+}
+function moveSpatial(dir){
+  const cards=frameCards();
+  const from=tileCentre(cards[selIdx]);
+  if(!from)return false;
+  const horiz=(dir==="left"||dir==="right");
+  let best=-1,bestScore=Infinity;
+  cards.forEach((c,i)=>{
+    if(i===selIdx)return;
+    const p=tileCentre(c);
+    if(!p)return;
+    const dx=p.x-from.x,dy=p.y-from.y;
+    if(dir==="left"&&dx>=-2)return;
+    if(dir==="right"&&dx<=2)return;
+    if(dir==="up"&&dy>=-2)return;
+    if(dir==="down"&&dy<=2)return;
+    /* distance along the axis travelled, with drift across it penalised so
+       a tile straight ahead beats a nearer one off to the side */
+    const along=Math.abs(horiz?dx:dy),cross=Math.abs(horiz?dy:dx);
+    const score=along+cross*2.5;
+    if(score<bestScore){bestScore=score;best=i}
+  });
+  if(best<0)return false;
+  selIdx=best;return true;
+}
 function moveSel(d){
   const n=frameCards().length;
   if(n)selIdx=((selIdx+d)%n+n)%n;
@@ -606,6 +656,14 @@ function renderCard(card){
       else if(out instanceof Node){host.innerHTML="";host.appendChild(out)}
     }catch(e){host.innerHTML="<div class='state'>render error</div>";
       console.warn("render fail",card.id,e)}
+    /* Cards re-render their whole list on every ▲▼, so the highlighted row
+       has to be scrolled back into view or it walks off the bottom of the
+       stage and you lose track of the selection entirely. "nearest" keeps
+       the list still while the selection is already visible. */
+    const cur=host.querySelector(".sel");
+    if(cur&&cur.scrollIntoView){
+      try{cur.scrollIntoView({block:"nearest"})}catch(e){}
+    }
   }
   /* refresh this card's tile wherever it appears */
   ["fr","ov"].forEach(tag=>{
@@ -651,8 +709,8 @@ addEventListener("resize",()=>{clearTimeout(_rz);
   _rz=setTimeout(()=>render(),120)});
 
 /* ---------------- input router ----------------
-   bezel:    ◄► walk tiles ccw/cw · OK open (again = fullscreen)
-             BACK overview
+   bezel:    arrows move to the nearest tile · OK open
+             (OK again on the open tile = fullscreen) · BACK overview
    main/full: ▲▼/OK act inside the card · ◄► move on · BACK bezel
    overview:  arrows select · OK open · BACK bezel            */
 addEventListener("keydown",e=>{
@@ -787,7 +845,10 @@ function route(k){
   }
 
   /* --- bezel has focus: walk the tiles, OK opens --- */
-  if(k==="left"||k==="right"){moveSel(k==="left"?-1:1);render();return}
+  if(k==="left"||k==="right"||k==="up"||k==="down"){
+    if(moveSpatial(k))render();
+    return;
+  }
   if(k==="enter"){
     const c=selectedCard();
     if(!c)return;
@@ -1121,17 +1182,25 @@ const cardRadio={
     const cur=ctx.audio.current();
     return list.map((st,i)=>{
       const now=cur&&cur.url===st.url;
+      const bad=ctx.audio.failed()===st.url;
       const rc=srcColor(st.region);
+      /* http streams cannot play on an https page unless the host allows
+         mixed content (our WebView wrapper does; a plain browser will not) */
+      const insecure=/^http:\/\//i.test(st.url);
       return "<div class='row"+(i===this.sel?" hl sel":"")+
         "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+
         (now?"<span style='color:var(--up)'>▶ </span>":"")+
+        (bad?"<span style='color:var(--down)'>⚠ </span>":"")+
         esc(st.label)+"</span>"+
-        "<span style='color:"+rc+";font-size:12px'>"+st.region+
-        "</span></div>";
+        "<span style='color:"+rc+";font-size:12px'>"+
+        (insecure?"<span class='lbl' style='margin-right:8px'>http</span>":"")+
+        st.region+"</span></div>";
     }).join("")+
     "<div class='state' style='margin-top:10px'>"+
-    (cur?"playing — OK on station stops/switches":
+    (ctx.audio.failed()?"⚠ that stream would not start — http stations "+
+      "need the AMBIENT app (a browser blocks them on an https page)":
+      cur?"playing — OK on station stops/switches":
       "▲▼ choose · OK play")+"</div>";
   },
   renderCompact(ctx){
@@ -1472,7 +1541,7 @@ const cardSystem={
       " · cards "+CARDS.length+" · "+(online?"online":"offline")+
       " · room "+esc(companion.code())+"</div>"+
       "<div class='state' style='margin-top:10px'>"+
-      "◄ ► walk tiles · OK open · OK again fullscreen<br>"+
+      "◄ ► ▲ ▼ move between tiles · OK open · OK again fullscreen<br>"+
       "in a card: ▲ ▼ / OK act · BACK back to tiles · BACK again "+
       "overview</div>";
   },
@@ -1520,6 +1589,9 @@ on("audio",p=>{
   const el=document.getElementById("st-audio");
   if(el)el.textContent=(p.state==="play"&&p.item)?
     "♪ "+p.item.label:"";
+  /* a stream that failed to start must repaint the list, or the ⚠ marker
+     and the explanation never appear */
+  if(p.state==="error")render();
 });
 render();
 CARDS.forEach(c=>refreshCard(c,true));

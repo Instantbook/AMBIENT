@@ -54,6 +54,16 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
 
+        // The page is served over HTTPS, but most public radio streams are
+        // still plain http - 7 of the 8 top Greek stations on
+        // radio-browser.info, for instance. Chromium blocks mixed-content
+        // media, so those stations failed silently while the https presets
+        // played. COMPATIBILITY_MODE re-allows http *media and images* while
+        // still blocking http scripts and stylesheets, which is the specific
+        // trade this needs - not ALWAYS_ALLOW, which would also let an
+        // http script run inside the page's origin.
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+
         // Keep navigation inside the app; without this an external link would
         // hand off to the cursor-driven browser we are trying to avoid.
         web.setWebViewClient(new WebViewClient());
