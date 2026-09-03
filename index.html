@@ -101,8 +101,9 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .tile .tbody .val{color:var(--ink)}
 /* sel = where the highlight is right now; staged = what the main window
    is showing. They are different states and must read differently. */
-.tile.sel{border-color:var(--accent);background:var(--accent-soft)}
-.tile.sel h3{color:var(--accent)}
+.tile.sel,.tile:focus{border-color:var(--accent);
+  background:var(--accent-soft);outline:none}
+.tile.sel h3,.tile:focus h3{color:var(--accent)}
 .tile.staged{border-left:3px solid var(--accent)}
 .tile.off{opacity:.32}
 /* fullscreen: collapse the grid to the stage; rails stay in the DOM so
@@ -188,7 +189,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v17";
+const APP_VERSION="v18";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -487,10 +488,15 @@ function focusSel(id){
 }
 
 /* ---------------- render: cockpit ---------------- */
+/* tabindex makes each tile a real focus target. TV browsers fall back to a
+   virtual mouse cursor when a page offers nothing focusable, and drive the
+   D-pad as spatial navigation when it does — so being focusable is what
+   keeps the remote talking to the app instead of to a floating dot. It
+   also gives keyboards and screen readers something to land on. */
 function tileHTML(card,sel,tag,isStaged){
   return "<div class='tile"+(sel?" sel":"")+(isStaged?" staged":"")+
-    "' id='"+tag+"-"+card.id+
-    "'><h3>"+(card.title||card.id)+"</h3><div class='tbody'>"+
+    "' id='"+tag+"-"+card.id+"' tabindex='0'"+
+    "><h3>"+(card.title||card.id)+"</h3><div class='tbody'>"+
     compactOf(card)+"</div></div>";
 }
 function compactOf(card){
@@ -570,6 +576,7 @@ function render(){
     const ff=document.getElementById("st-full");
     if(ff)ff.textContent=mode==="full"?"⤡":"⛶";
     if(center)renderCard(center);
+    focusTile();
   }
 }
 function renderCard(card){
@@ -659,6 +666,28 @@ function paintSel(){
       mode==="bezel"&&!!cur&&tileCardId(t)===cur.id);
   });
 }
+/* Keep DOM focus on the highlighted tile. Our keydown handler calls
+   preventDefault(), so the browser skips its own spatial navigation and
+   this stays the single source of truth — no double-stepping. */
+function focusTile(){
+  if(mode!=="bezel")return;
+  const a=document.activeElement;
+  if(a&&a.tagName==="INPUT")return;      /* never steal from a text field */
+  const c=frameCards()[selIdx];
+  if(!c)return;
+  const el=document.getElementById("fr-"+c.id);
+  if(el&&el!==a){try{el.focus({preventScroll:true})}catch(e){try{el.focus()}
+    catch(e2){}}}
+}
+/* if focus arrives some other way (click, browser nav), follow it */
+document.addEventListener("focusin",e=>{
+  if(mode!=="bezel")return;
+  const t=e.target;if(!t||!t.closest)return;
+  const tile=t.closest("#cockpit .tile");
+  if(!tile||tile.classList.contains("filler"))return;
+  const i=frameCards().findIndex(c=>c.id===tileCardId(tile));
+  if(i>=0&&i!==selIdx){selIdx=i;paintSel()}
+});
 function openCard(c){
   if(!c)return;
   if(c._active===false)c._active=true;
@@ -668,6 +697,10 @@ function openCard(c){
   render();
 }
 document.addEventListener("click",e=>{
+  /* detail===0 means the browser synthesised this click from a keypress on
+     a focused element; route() already handled that key, and acting again
+     would turn one OK into open-then-fullscreen */
+  if(e.detail===0)return;
   const t=e.target;if(!t||!t.closest)return;
   /* a row a card marked pickable — pointer equivalent of ▲▼ then OK */
   const row=t.closest("#stage-body [data-row]");
