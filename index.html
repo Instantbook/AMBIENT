@@ -136,12 +136,18 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
   grid-template-columns:1fr}
 #cockpit.full .rail{display:none}
 /* overview mode */
-#cockpit.overview{grid-template-columns:1fr}
-#cockpit.overview #stage-wrap,{display:none}
-#overview{display:none;flex:1;min-height:0;align-content:center}
-#cockpit.overview #overview{display:grid;gap:14px;
+/* Overview collapsed the columns but left grid-template-rows as
+   "tile 1fr tile", so #overview - which declares no grid-area - auto-placed
+   into the 118px top-rail row and spilled off the screen. Give the mode a
+   single full-size cell and put the grid in it.
+   (The old "#cockpit.overview #stage-wrap,{display:none}" rule had a stray
+   comma, making the whole selector invalid; the working copy is below.) */
+#cockpit.overview{grid-template-columns:1fr;grid-template-rows:1fr;
+  grid-template-areas:"ov"}
+#overview{display:none;min-height:0}
+#cockpit.overview #overview{grid-area:ov;display:grid;gap:14px;
   grid-template-columns:repeat(auto-fill,150px);justify-content:center;
-  align-content:center}
+  align-content:center;overflow-y:auto;scrollbar-width:none}
 #cockpit.overview .rail,#cockpit.overview #stage-wrap{display:none}
 #overview .tile{width:150px;height:150px}
 /* ---------- shared data typography ---------- */
@@ -213,7 +219,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v23";
+const APP_VERSION="v24";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
