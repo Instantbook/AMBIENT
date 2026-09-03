@@ -76,8 +76,11 @@ input:focus,textarea:focus{border-color:var(--accent)}
 
 <div class="sect">
   <h2>TYPE TO SCREEN</h2>
-  <input id="text" placeholder="text for the active card (search, entry…)">
-  <div class="row2"><button onclick="sendText()">Send text</button></div>
+  <input id="text" placeholder="text for the active card, or a URL…">
+  <div class="row2">
+    <button onclick="sendText()">Send text</button>
+    <button onclick="sendUrl()">Send as link</button>
+  </div>
 </div>
 
 <div class="sect">
@@ -152,6 +155,11 @@ function sendChat(){
 function sendText(){
   const v=$("text").value.trim();if(!v)return;
   send({t:"text",v});$("text").value="";
+}
+function sendUrl(){
+  const v=$("text").value.trim();if(!v)return;
+  send({t:"inject",kind:"url",v});$("text").value="";
+  log("link sent to LAUNCH");
 }
 if($("room").value&&$("worker").value)connect();
 </script>

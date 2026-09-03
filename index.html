@@ -169,7 +169,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v10";
+const APP_VERSION="v11";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1110,6 +1110,75 @@ const cardClaude={
   }
 };
 
+/* ---- launch: web bookmarks — the box's missing browser home ----
+   OK opens the selected site full-screen (BACK returns to AMBIENT;
+   state persists, the shell is service-worker cached). Add sites via
+   the field (TV keyboard) as "url" or "label|url", or paste a URL
+   from the paired phone (inject kind:url lands here). ---- */
+const cardLaunch={
+  id:"launch",title:"LAUNCH",icon:"globe",
+  pane:"web",size:"large",order:60,refresh:null,offline:"live-only",
+  accepts:["url"],sel:0,
+  _links(ctx){return ctx.storage.get("links",[
+    {label:"YOUTUBE",url:"https://www.youtube.com"},
+    {label:"WIKIPEDIA",url:"https://www.wikipedia.org"}
+  ])},
+  _add(ctx,v){
+    v=String(v||"").trim();if(!v)return;
+    let label=null,url=v;
+    if(v.includes("|")){const p=v.split("|");label=p[0].trim();
+      url=p.slice(1).join("|").trim()}
+    if(!/^https?:\/\//i.test(url))url="https://"+url;
+    try{label=label||new URL(url).hostname.replace(/^www\./,"")
+      .toUpperCase()}catch(e){return}
+    const links=this._links(ctx);
+    links.push({label:label.toUpperCase().slice(0,24),url});
+    ctx.storage.set("links",links.slice(0,12));
+    ctx.rerender();
+  },
+  onInject(ctx,item){if(item.kind==="url")this._add(ctx,item.v)},
+  render(ctx){
+    const links=this._links(ctx);
+    return links.map((l,i)=>{
+      let host="";try{host=new URL(l.url).hostname}catch(e){}
+      return "<div class='row"+(i===this.sel?" hl sel":"")+"'>"+
+        "<span class='"+(i===this.sel?"":"lbl")+"'>"+esc(l.label)+
+        "</span><span style='color:"+srcColor(host)+
+        ";font-size:12px'>"+esc(host)+"</span></div>";
+    }).join("")+
+    "<input type='text' id='launch-in' placeholder='add: url  or  label|url'"+
+    " style='margin-top:10px'>"+
+    "<div class='state' style='margin-top:6px'>▲▼ choose · OK open "+
+    "full-screen · BACK in the browser returns here · paste a link from "+
+    "the phone to add it</div>";
+  },
+  renderCompact(ctx){
+    const links=this._links(ctx);
+    return "<span class='val'>"+links.length+"</span> "+
+      "<span class='lbl'>sites</span><br><span class='lbl'>"+
+      esc(links[0]?links[0].label:"")+"</span>";
+  },
+  onKey(ctx,k){
+    const links=this._links(ctx);
+    if(k==="down"&&this.sel<links.length-1){this.sel++;ctx.rerender();
+      return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"&&links[this.sel]){
+      try{location.assign(links[this.sel].url)}catch(e){}
+      return true;
+    }
+    return false;
+  },
+  init(ctx){
+    document.addEventListener("change",e=>{
+      if(e.target&&e.target.id==="launch-in"&&e.target.value.trim()){
+        const v=e.target.value.trim();e.target.value="";
+        this._add(ctx,v);
+      }
+    });
+  }
+};
+
 /* ---- scenes: apply a saved composition (spec §5) ---- */
 const cardScenes={
   id:"scenes",title:"SCENES",icon:"layers",
@@ -1183,7 +1252,7 @@ const cardSystem={
 
 /* ---------------- boot ---------------- */
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardClaude,cardRadio,cardVis,cardScenes,cardSystem]);
+  cardClaude,cardRadio,cardVis,cardLaunch,cardScenes,cardSystem]);
 document.addEventListener("change",e=>{
   if(e.target&&e.target.id==="claude-in"&&e.target.value.trim()){
     const v=e.target.value.trim();e.target.value="";
