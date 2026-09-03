@@ -83,22 +83,46 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 #stage-body [data-row]{cursor:pointer}
 #stage-body [data-row]:hover{color:var(--accent)}
 #st-full{color:var(--dim);letter-spacing:0}
-.clk-row{display:flex;align-items:center;gap:9px}
-.clk-mid{flex:1;min-width:0}
-.clk-t{font-family:var(--mono);font-size:21px;font-weight:300;
-  color:var(--ink);line-height:1.05}
-.clk-c{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;
-  color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;
-  text-overflow:ellipsis}
+/* ---------- tile face ----------
+   A tile is an instrument, not a shrunken card. Every one renders the same
+   shape — one short VALUE plus one LABEL — and every text run is clamped,
+   so nothing is ever cut mid-word the way a raw headline or a wrapped
+   price was. The card's full content belongs on the stage, not in here. */
 .tile.filler .tbody{align-items:center;justify-content:center;
-  color:var(--faint);font-size:16px;letter-spacing:.3em}
+  color:var(--faint);font-size:14px;letter-spacing:.3em}
 .tile h3{font-family:var(--mono);font-size:9px;font-weight:500;
-  letter-spacing:.15em;color:var(--dim);margin-bottom:6px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tile .tbody{font-size:12.5px;color:var(--dim);line-height:1.5;
-  flex:1;display:flex;flex-direction:column;justify-content:center;
+  letter-spacing:.15em;color:var(--dim);margin-bottom:7px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
+.tile .tbody{font-size:12.5px;color:var(--dim);line-height:1.35;
+  flex:1;min-height:0;display:flex;flex-direction:column;
+  justify-content:center;overflow:hidden}
+/* the headline number / state word */
+.tv{font-family:var(--mono);font-size:21px;font-weight:300;color:var(--ink);
+  line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* word-shaped values ("ALL PANELS", "day-cyan") need to step down a size
+   or they ellipsise inside a 118px tile */
+.tv.sm{font-size:13px;letter-spacing:.03em}
+.tl{font-size:10px;letter-spacing:.07em;color:var(--dim);margin-top:4px;
+  line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow:hidden}
+/* stacked two-city rows (clock, weather) */
+.t2+.t2{border-top:1px dotted var(--faint);padding-top:6px;margin-top:6px}
+.t2 .r{display:flex;align-items:center;gap:7px;min-width:0}
+.t2 .r .tv{font-size:17px}
+.t2 .c{font-family:var(--mono);font-size:8.5px;letter-spacing:.11em;
+  color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+/* label/value pairs (markets) */
+.kv{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.kv+.kv{margin-top:6px}
+.kv .k{font-family:var(--mono);font-size:9px;letter-spacing:.1em;
+  color:var(--dim)}
+.kv .v{font-family:var(--mono);font-size:15px;color:var(--ink);
+  white-space:nowrap}
+/* source identity dots — shows what a tile holds without spelling it out */
+.dots{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;max-height:14px;
   overflow:hidden}
-.tile .tbody .val{color:var(--ink)}
+.dots i{width:6px;height:6px;border-radius:50%;display:block;flex:none}
 /* sel = where the highlight is right now; staged = what the main window
    is showing. They are different states and must read differently. */
 .tile.sel,.tile:focus{border-color:var(--accent);
@@ -189,7 +213,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v21";
+const APP_VERSION="v22";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -543,10 +567,26 @@ function focusSel(id){
    D-pad as spatial navigation when it does — so being focusable is what
    keeps the remote talking to the app instead of to a floating dot. It
    also gives keyboards and screen readers something to land on. */
+/* One tile face for every card: a short value, an optional label, optional
+   identity dots. Long word-values step down a size rather than ellipsising. */
+function face(value,label,opts){
+  opts=opts||{};
+  const v=String(value==null?"—":value);
+  const sm=v.length>7||opts.small;
+  return "<div class='tv"+(sm?" sm":"")+"'"+
+    (opts.color?" style='color:"+opts.color+"'":"")+">"+v+"</div>"+
+    (label?"<div class='tl'>"+label+"</div>":"")+
+    (opts.dots&&opts.dots.length
+      ? "<div class='dots'>"+opts.dots.slice(0,8).map(c=>
+          "<i style='background:"+c+"'></i>").join("")+"</div>"
+      : "");
+}
+/* tileTitle lets a card keep a rich stage header ("EDMONTON · ATHENS")
+   while the 118px tile shows something that actually fits */
 function tileHTML(card,sel,tag,isStaged){
   return "<div class='tile"+(sel?" sel":"")+(isStaged?" staged":"")+
     "' id='"+tag+"-"+card.id+"' tabindex='0'"+
-    "><h3>"+(card.title||card.id)+"</h3><div class='tbody'>"+
+    "><h3>"+(card.tileTitle||card.title||card.id)+"</h3><div class='tbody'>"+
     compactOf(card)+"</div></div>";
 }
 function compactOf(card){
@@ -601,8 +641,10 @@ function layoutSlots(cards,total){
   return out;
 }
 function fillerHTML(n){
-  return "<div class='tile filler'><h3>·</h3>"+
-    "<div class='tbody'>· · ·</div></div>";
+  /* empty instrument bays: present enough to keep the bezel symmetrical,
+     quiet enough not to compete with the tiles that hold something */
+  return "<div class='tile filler'><h3>&nbsp;</h3>"+
+    "<div class='tbody'>·</div></div>";
 }
 function render(){
   const cp=document.getElementById("cockpit");
@@ -946,7 +988,8 @@ function sparkline(vals,w,h){
 
 /* ---- clock-dual ---- */
 const cardClock={
-  id:"clock",title:"EDMONTON · ATHENS",icon:"clock",pinned:true,
+  id:"clock",title:"EDMONTON · ATHENS",tileTitle:"CLOCK",icon:"clock",
+  pinned:true,
   pane:"dashboard",size:"large",order:10,refresh:null,offline:"cached",
   zones:[{name:"EDMONTON",tz:"America/Edmonton"},
          {name:"ATHENS",tz:"Europe/Athens"}],
@@ -977,21 +1020,16 @@ const cardClock={
         "<div class='date-line'>"+p.date+"</div></div>";
     }).join("")+"</div>";
   },
+  /* The seconds arc lives on the stage only. In a 118px tile it ate the
+     width that the city name needed, which is why these read "EDMO…" and
+     "ATHE…" — the label is the useful part, so the decoration goes. */
   renderCompact(){
-    return this.zones.map((z,i)=>{
+    return this.zones.map(z=>{
       const p=this._parts(z.tz);
       const h=+p.hour,night=h<7||h>=21;
-      const sec=+p.second,r=9,c=2*Math.PI*r,off=c-(sec/60)*c;
-      return "<div class='clk-row'"+(i?" style='border-top:1px dotted "+
-        "var(--faint);padding-top:7px;margin-top:7px'":"")+">"+
-        dayNightIcon(night,20)+
-        "<div class='clk-mid'><div class='clk-t'>"+p.hour+":"+p.minute+
-        "</div><div class='clk-c'>"+z.name+"</div></div>"+
-        "<svg class='arc' width='24' height='24' viewBox='0 0 24 24'>"+
-        "<circle class='face' cx='12' cy='12' r='"+r+"' stroke-width='1'/>"+
-        "<circle class='hand' cx='12' cy='12' r='"+r+"' stroke-width='1.6' "+
-        "stroke-dasharray='"+c.toFixed(1)+"' stroke-dashoffset='"+
-        off.toFixed(1)+"' transform='rotate(-90 12 12)'/></svg></div>";
+      return "<div class='t2'><div class='r'>"+dayNightIcon(night,16)+
+        "<span class='tv'>"+p.hour+":"+p.minute+"</span></div>"+
+        "<div class='c'>"+z.name+"</div></div>";
     }).join("");
   }
 };
@@ -1038,17 +1076,20 @@ const cardWeather={
     return "<div class='dual'>"+spot("wx.edm","EDMONTON")+
       spot("wx.pc","ATHENS")+"</div>";
   },
+  /* was "☁ 19° EDM" on one wrapping line — city under the reading instead,
+     so both names fit in full and the temperature stays the big thing */
   renderCompact(ctx,data){
-    const t=(key,tag)=>{
+    const row=(key,name)=>{
       const d=this._get(ctx,data,key);
-      if(!d)return "";
+      if(!d)return "<div class='t2'><div class='tv'>—</div>"+
+        "<div class='c'>"+name+"</div></div>";
       const v=Math.round(d.current.temperature_2m);
-      return wxIcon(d.current.weather_code,16)+
-        " <span class='val' style='color:"+tempColor(v)+"'>"+v+
-        "°</span> <span class='lbl'>"+tag+"</span>";
+      return "<div class='t2'><div class='r'>"+
+        wxIcon(d.current.weather_code,17)+
+        "<span class='tv' style='color:"+tempColor(v)+"'>"+v+"°</span></div>"+
+        "<div class='c'>"+name+"</div></div>";
     };
-    return (t("wx.edm","EDM")+"<br>"+t("wx.pc","PCH"))||
-      "<span class='lbl'>—</span>";
+    return row("wx.edm","EDMONTON")+row("wx.pc","ATHENS");
   }
 };
 
@@ -1099,15 +1140,22 @@ const cardMarkets={
     }
     return rows||"<div class='state'>awaiting data…</div>";
   },
+  /* aligned label/value pairs — the old version stacked bare numbers and
+     their labels on separate wrapped lines, so BTC fell off the bottom */
   renderCompact(ctx,data){
     const fx=(data&&data.fx)||ctx.cachedOnly("fx");
     const cr=(data&&data.crypto)||ctx.cachedOnly("crypto");
-    const a=fx&&fx.rates?"<span class='val'>"+fx.rates.EUR.toFixed(3)+
-      "</span> <span class='lbl'>EUR</span>":"";
-    const b=cr&&cr.bitcoin?"<span class='val'>$"+
-      Math.round(cr.bitcoin.cad/1000)+"k</span> "+
-      "<span class='lbl'>BTC</span>":"";
-    return (a&&b)?a+"<br>"+b:(a||b||"<span class='lbl'>—</span>");
+    const rows=[];
+    if(fx&&fx.rates)rows.push(["EUR",fx.rates.EUR.toFixed(3),""]);
+    if(cr&&cr.bitcoin){
+      const ch=cr.bitcoin.cad_24h_change||0;
+      rows.push(["BTC","$"+Math.round(cr.bitcoin.cad/1000)+"k",
+        ch>=0?"var(--up)":"var(--down)"]);
+    }
+    if(!rows.length)return face("—","awaiting data");
+    return rows.map(r=>"<div class='kv'><span class='k'>"+r[0]+
+      "</span><span class='v'"+(r[2]?" style='color:"+r[2]+"'":"")+">"+
+      r[1]+"</span></div>").join("");
   }
 };
 
@@ -1142,12 +1190,18 @@ const cardHeadlines={
         esc(it.source||"")+"</span></div>";
     }).join("")||"<div class='state'>feed empty</div>";
   },
+  /* A headline cannot be read in a 118px square — it just gets guillotined
+     mid-word. The tile reports the HOLDING instead: how many, from how many
+     sources, with a colour dot per source. Read them on the stage. */
   renderCompact(ctx,data){
     const items=this._items(ctx,data);
-    if(!items||!items.length)return "<span class='lbl'>no feed</span>";
-    return "<span style='border-left:3px solid "+
-      srcColor(items[0].source)+";padding-left:7px;display:block'>"+
-      esc(items[0].title)+"</span>";
+    if(!items||!items.length)
+      return face("—",WORKER_BASE()?"no feed":"needs worker URL");
+    const srcs=[];
+    items.forEach(i=>{if(srcs.indexOf(i.source)<0)srcs.push(i.source)});
+    return face(items.length,
+      "headlines · "+srcs.length+" source"+(srcs.length===1?"":"s"),
+      {dots:srcs.map(srcColor)});
   },
   onKey(ctx,k){
     const items=this._items(ctx,null);if(!items)return false;
@@ -1218,8 +1272,11 @@ const cardRadio={
   },
   renderCompact(ctx){
     const cur=ctx.audio.current();
-    return cur?"<span class='val'>▶ "+esc(cur.label)+"</span>":
-      "<span class='lbl'>idle</span>";
+    if(cur)return face("▶",esc(cur.label),{color:"var(--up)"});
+    const list=this._list(ctx,this._data);
+    const regions=[];
+    list.forEach(s=>{if(regions.indexOf(s.region)<0)regions.push(s.region)});
+    return face(list.length,"stations",{dots:regions.map(srcColor)});
   },
   onKey(ctx,k){
     const list=this._list(ctx,this._data);
@@ -1318,8 +1375,9 @@ const cardVis={
       (cur?esc(cur.label):"no audio — OK cycles style")+"</span></div>";
   },
   renderCompact(ctx){
-    return "<span class='val'>"+VIS_STYLES[this.styleIdx].id+"</span> "+
-      "<span class='lbl'>"+(ctx.audio.playing()?"live":"idle")+"</span>";
+    const on=ctx.audio.playing();
+    return face(VIS_STYLES[this.styleIdx].id,on?"live spectrum":"idle",
+      {color:on?"var(--accent)":null});
   },
   onKey(ctx,k){
     if(k==="enter"){this._cycle(ctx);return true}
@@ -1406,10 +1464,14 @@ const cardClaude={
       (companion.state()==="on"?"●":"○")+" "+esc(companion.code())+
       "</div>";
   },
+  /* the old version pasted 60 raw characters of a reply into the tile and
+     let the box crop them; report state and volume instead */
   renderCompact(ctx){
-    const last=this.msgs[this.msgs.length-1];
-    return last?esc(String(last.content).slice(0,60)):
-      "<span class='lbl'>ready · "+esc(companion.code())+"</span>";
+    if(!WORKER_BASE())return face("—","needs worker URL");
+    if(this.busy)return face("…","thinking",{color:"var(--accent)"});
+    const n=this.msgs.filter(m=>m.role==="assistant").length;
+    return n?face(n,"replies · room "+esc(companion.code()))
+            :face("READY","room "+esc(companion.code()));
   },
   onKey(ctx,k){
     if(k==="enter"){this.voice=!this.voice;
@@ -1470,9 +1532,11 @@ const cardLaunch={
   },
   renderCompact(ctx){
     const links=this._links(ctx);
-    return "<span class='val'>"+links.length+"</span> "+
-      "<span class='lbl'>sites</span><br><span class='lbl'>"+
-      esc(links[0]?links[0].label:"")+"</span>";
+    const dots=links.map(l=>{
+      let h="";try{h=new URL(l.url).hostname}catch(e){}
+      return srcColor(h);
+    });
+    return face(links.length,"sites",{dots});
   },
   onKey(ctx,k){
     const links=this._links(ctx);
@@ -1521,7 +1585,7 @@ const cardScenes={
   },
   renderCompact(){
     const sc=allScenes().find(s=>s.id===currentScene);
-    return "<span class='val'>"+esc(sc?sc.name:"—")+"</span>";
+    return face(esc(sc?sc.name:"—"),"active scene");
   },
   onKey(ctx,k){
     const list=allScenes();
@@ -1559,8 +1623,9 @@ const cardSystem={
       "overview</div>";
   },
   renderCompact(ctx){
-    return "<span class='val'>"+ctx.theme()+"</span><br>"+
-      "<span class='lbl'>"+APP_VERSION+" · "+CARDS.length+" cards</span>";
+    return face(ctx.theme(),
+      APP_VERSION+" · "+CARDS.length+" cards · "+
+      (online?"online":"offline"));
   },
   onKey(ctx,k){
     if(k==="enter"){
