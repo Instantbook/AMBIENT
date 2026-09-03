@@ -173,7 +173,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v14";
+const APP_VERSION="v15";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1314,14 +1314,41 @@ on("audio",p=>{
 render();
 CARDS.forEach(c=>refreshCard(c,true));
 
-/* updateViaCache:"none" makes the browser revalidate sw.js against the
-   network on every update check instead of reusing its HTTP-cached copy.
-   GitHub Pages serves max-age=600, so without this a fresh deploy stays
-   invisible on the device for up to 10 minutes — the update check reads
-   the stale script, sees no byte change, and keeps the old cache alive. */
-if("serviceWorker" in navigator)
+/* ---------------- update channel ----------------
+   This runs unattended on a device with no address bar and no reload
+   button, so a deploy has to arrive by itself. Three parts:
+
+   updateViaCache:"none" — revalidate sw.js against the network on every
+     update check rather than reusing the HTTP-cached copy (GitHub Pages
+     serves max-age=600, which otherwise hides a deploy for 10 minutes).
+   reg.update()          — the TCL browser does not reliably run its own
+     update check on navigation (observed: v14 pushed, two reloads, still
+     serving v13), so ask explicitly on load and on a timer.
+   controllerchange      — when the new worker claims the page the shell
+     on disk has changed underneath us, so reload once to match it.
+
+   The reload is deferred while audio is playing: losing a radio stream
+   to a background deploy would be worse than applying it a bit later. */
+if("serviceWorker" in navigator){
+  const hadController=!!navigator.serviceWorker.controller;
+  let reloading=false,pending=false;
+  const apply=()=>{
+    if(reloading)return;
+    if(audioBus.playing()){pending=true;return} /* wait for silence */
+    reloading=true;location.reload();
+  };
+  on("audio",p=>{if(p.state==="stop"&&pending)apply()});
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{
+    /* first install claims an uncontrolled page — nothing stale to fix */
+    if(hadController)apply();
+  });
   navigator.serviceWorker.register("sw.js",{updateViaCache:"none"})
+    .then(reg=>{
+      reg.update();
+      setInterval(()=>{try{reg.update()}catch(e){}},10*60*1000);
+    })
     .catch(()=>{});
+}
 </script>
 </body>
 </html>
