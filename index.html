@@ -173,7 +173,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v13";
+const APP_VERSION="v14";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -459,9 +459,12 @@ function compactOf(card){
 const GAP=14,PAD=12;
 function frameGeom(){
   const vw=innerWidth,vh=innerHeight;
-  /* tile ~19% of height keeps compact tiles legible on a worn display
-     while leaving the stage dominant; clamped for very small/large screens */
-  const tile=Math.round(Math.max(84,Math.min(176,vh*0.19)));
+  /* 118px is a hard floor, not a preference: renderCompact() content (the
+     clock's two icon+time+arc rows especially) is authored for it and gets
+     clipped by .tile{overflow:hidden} below that. Shrinking tiles to gain
+     slots trades a clipped rail for clipped tile contents — so hold the
+     floor and let the slot COUNT absorb small viewports instead. */
+  const tile=Math.round(Math.max(118,Math.min(176,vh*0.19)));
   /* a side rail only gets the stage row: total height minus both
      horizontal rails, the page padding and the two grid gaps */
   const railH=vh-2*PAD-2*tile-2*GAP;
