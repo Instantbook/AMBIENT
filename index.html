@@ -213,7 +213,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v22";
+const APP_VERSION="v23";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1200,7 +1200,7 @@ const cardHeadlines={
     const srcs=[];
     items.forEach(i=>{if(srcs.indexOf(i.source)<0)srcs.push(i.source)});
     return face(items.length,
-      "headlines · "+srcs.length+" source"+(srcs.length===1?"":"s"),
+      "from "+srcs.length+" source"+(srcs.length===1?"":"s"),
       {dots:srcs.map(srcColor)});
   },
   onKey(ctx,k){
@@ -1623,9 +1623,7 @@ const cardSystem={
       "overview</div>";
   },
   renderCompact(ctx){
-    return face(ctx.theme(),
-      APP_VERSION+" · "+CARDS.length+" cards · "+
-      (online?"online":"offline"));
+    return face(ctx.theme(),APP_VERSION+" · "+CARDS.length+" cards");
   },
   onKey(ctx,k){
     if(k==="enter"){
@@ -1644,6 +1642,11 @@ const cardSystem={
       if(e.target&&e.target.id==="worker-in"){
         localStorage.setItem("ambient.worker",e.target.value.trim());
         CARDS.forEach(c=>refreshCard(c,true));
+        /* refreshCard returns early for cards with no sources, so CLAUDE
+           and LAUNCH kept showing "needs worker URL" after it was set.
+           Repaint the whole frame, not just the fetching cards. */
+        render();
+        companion.connect();   /* the relay lives on the same worker */
       }
     });
   }
