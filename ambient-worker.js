@@ -89,7 +89,19 @@ export default {
       const items = [];
       await Promise.all(feeds.map(async f => {
         try {
-          const r = await fetch(f, { cf: { cacheTtl: 300 } });
+          // Several publishers 403 a request with no User-Agent, and the
+          // failure is invisible here: the 403 body is HTML, the item regex
+          // matches nothing, and the feed silently contributes zero rows.
+          const r = await fetch(f, {
+            cf: { cacheTtl: 300 },
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (compatible; AMBIENT/1.0; " +
+                "+https://instantbook.github.io/AMBIENT/)",
+              "Accept": "application/rss+xml, application/xml, text/xml",
+            },
+          });
+          if (!r.ok) return;
           const xml = await r.text();
           const source = (xml.match(/<title>(.*?)<\/title>/) || [])[1]
             || new URL(f).hostname;
@@ -116,7 +128,12 @@ function json(obj, status, env) {
   });
 }
 function decode(s) {
-  return String(s || "").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+  // The channel <title> is matched without the CDATA handling the per-item
+  // regex has, so BBC arrived as the literal "<![CDATA[BBC News]]>" - which
+  // then showed as the source label and fed srcColor()'s hash.
+  return String(s || "")
+    .replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">").replace(/&#39;|&apos;/g, "'")
     .replace(/&quot;/g, '"').trim();
 }
