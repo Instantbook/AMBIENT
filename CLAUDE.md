@@ -41,6 +41,28 @@ Untracked local-only files, ignored via `.git/info/exclude` (which is local to `
 `info.md` (a pasted transcript of the claude.ai session that designed v11 — historical context, not
 documentation), `extracted/` (a scratch unzip of `ambient-v11.zip`), and this `CLAUDE.md`.
 
+### The Cloudflare Worker
+
+Deployed and live at **`https://ambient-worker.dbazos1.workers.dev`** (account `dbazos1`).
+Config is `wrangler.toml`; redeploy with `npx wrangler deploy` from the repo root. It is a *separate*
+Worker from the NOUS one (`curly-term-5539`, a generic fetch proxy with a shared-secret `k=` param — it
+has nothing reusable for AMBIENT).
+
+| Endpoint | State | Needs |
+|---|---|---|
+| `/feeds` | ✅ 12 headlines, BBC + ΤΟ ΒΗΜΑ | `FEEDS` var |
+| `/claude` | ✅ verified end-to-end | `ANTHROPIC_API_KEY` **secret** |
+| `/ws` | ✅ Durable Objects available on this plan | `ROOMS` binding |
+
+- **Secrets are per-Worker, not per-account.** The key initially went onto the NOUS Worker and `/claude`
+  kept returning `no key configured`.
+- **`wrangler secret put` reads stdin**, so it cannot be run through Claude Code's `!` prefix — it gets EOF
+  and silently stores an *empty* secret that still shows up in `secret list`. Use a real terminal or the
+  dashboard. (`wrangler login` works through `!` because it hands off to a browser.)
+- **Dashboard plaintext Variables get wiped by `wrangler deploy`** — `[vars]` in `wrangler.toml` replaces
+  them. Secrets survive.
+- `ALLOW_ORIGIN` is the real access control; the room code is pairing convenience, not authentication.
+
 ### Known drift
 
 `SETUP.md` in the repo is a **v6-era document**. It predates the v7 visual language, the v9 bezel layout,
@@ -203,9 +225,82 @@ The same Worker proxies `/claude` (holds `ANTHROPIC_API_KEY` as a Worker secret;
 `/feeds` (server-side RSS fetch + regex parse, keeping the client CORS-clean). The `wrangler.toml`
 template is in the comment block at the bottom of `ambient-worker.js`.
 
+## Where things stand (end of the 2026-09-02 session)
+
+Running **v24** on the device, inside the `app/` wrapper, with the Worker URL configured.
+
+**Verified working on hardware:** D-pad tile navigation · OK to open · OK-again fullscreen · clock ·
+weather · markets · headlines (live, both sources) · CLAUDE (asked and answered through the Worker on the
+glasses) · radio audio for the https presets, with the real-FFT visualizer · scenes · launch · system ·
+the `/ws` companion relay connecting (`LINK <room>` in the stage header).
+
+**Not yet done, in the order agreed:**
+
+1. **Audio proxy for http radio.** 7 of 8 top Greek stations on radio-browser are plain `http`, the page is
+   `https`, and Chromium blocks mixed-content media — the streams themselves are alive (verified
+   `200 audio/mpeg`). `MIXED_CONTENT_COMPATIBILITY_MODE` is in the wrapper but is probably the wrong tool,
+   since "compatibility" means *behave like a modern browser* and modern Chromium blocks mixed audio
+   outright; **this was never confirmed either way — verify before building on it.** The agreed fix is a
+   Worker `/stream?url=…` passthrough: works in any browser rather than only the APK, needs no security
+   relaxation, and arriving same-origin would also give the Greek stations real FFT instead of the
+   synthetic fallback. Open question: Cloudflare's tolerance for long-lived streaming connections.
+   The one-line alternative is `MIXED_CONTENT_ALWAYS_ALLOW`, which also re-permits http *scripts* — a real
+   downgrade, deliberately not taken.
+2. **greek-radio.gr as a curated station source.** Bigger than a patch: a `/radio` endpoint in the Worker
+   that fetches and parses it, a station schema carrying genre/region so the card can group them, and
+   probably a favourites list in localStorage.
+3. **Phone companion** — deployed and connecting, never actually paired from a phone.
+4. Whether `speechSynthesis` really speaks replies aloud in the WebView. TTS (`com.google.android.tts`) is
+   installed and the card reports `voice ON`, but it has only ever been seen, not heard.
+
+### Provisioning the device after a wipe
+
+`pm clear` wipes localStorage — room code, scenes, bookmarks and the **Worker URL** all reset, so this is
+needed after every forced update:
+
+```
+adb shell am start -n io.github.instantbook.ambient/.MainActivity
+adb shell input tap 142 672          # SYSTEM tile (left rail)
+adb shell input keyevent KEYCODE_DPAD_DOWN   # ▼ focuses the relay field
+adb shell input text "https://ambient-worker.dbazos1.workers.dev"
+adb shell input keyevent KEYCODE_ENTER
+adb shell input keyevent KEYCODE_BACK
+```
+
+Screenshots: `adb shell screencap -p /sdcard/x.png` then `adb pull` — never pipe `exec-out` through a
+PowerShell `>` redirect, it corrupts the PNG with a BOM.
+
+### The assistant button
+
+The remote's voice button sends `KEY_ASSISTANT` → `KEYCODE_ASSIST`, which **the system intercepts** — it
+never reaches the app, and only `com.google.android.katniss` handles `ACTION_ASSIST`. Answers from that
+button come from Google, not Claude. `KEYCODE_VOICE_ASSIST` and `KEYCODE_SEARCH` are *not* intercepted.
+
+Voice-to-Claude already works without any of that: the leanback IME has built-in dictation, so
+**CLAUDE tile → OK → ▼ → hold the mic → speak**. Note that even if AMBIENT became the assist app, speech
+recognition would still be Google's (`voice_recognition_service`) — only the answering model would change.
+
+To point the button at AMBIENT it would need an `ACTION_ASSIST` filter plus `RECORD_AUDIO`/`SpeechRecognizer`,
+and these settings changed (which replaces Google Assistant device-wide). Restore values:
+
+```
+settings put secure assistant                 com.google.android.katniss/.search.serviceapi.KatnissVoiceInteractionService
+settings put secure voice_interaction_service com.google.android.katniss/.search.serviceapi.KatnissVoiceInteractionService
+```
+
 ## Visual language
 
 The frame stays monotone HUD; color is reserved for carrying data meaning — `tempColor()` (cold-blue →
 hot-red), `wxIcon()` (condition → icon+color), `srcColor()` (stable hash → per-source identity color), and
 up/down deltas on markets. Keep new cards on that split: quiet frame, colorful data. Don't introduce new
 chrome colors.
+
+### Tiles are instruments, not shrunken cards
+
+`renderCompact()` must say what the card is **holding**, never show a slice of its content. Tiles are
+118px squares: a headline, a reply, or a wrapped price gets guillotined mid-word and is useless as a
+glance. Build every tile from `face(value, label, {color, dots})` — one short value, one label, optional
+identity dots — which clamps every text run so nothing is ever cut mid-word. Word-shaped values step down
+a size automatically (`.tv.sm`) rather than ellipsising. Counts, states and identity dots are the
+vocabulary: `12 / from 2 sources`, `11 / stations`, `READY / room 5ND2Z`. The full content belongs on the
+stage. `tileTitle` lets a card keep a rich stage header while the tile shows something that fits.

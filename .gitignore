@@ -4,3 +4,6 @@ app/build/
 # Signing keys never belong in the repo
 *.keystore
 *.jks
+
+# wrangler's local state
+.wrangler/
