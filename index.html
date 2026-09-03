@@ -74,8 +74,15 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 /* rail tiles */
 .tile{position:relative;border:1px solid var(--faint);border-radius:3px;
   padding:8px 10px;overflow:hidden;width:var(--tile);height:var(--tile);
-  flex:none;display:flex;flex-direction:column}
-.tile.filler{border-style:dashed;opacity:.45}
+  flex:none;display:flex;flex-direction:column;cursor:pointer}
+.tile.filler{border-style:dashed;opacity:.45;cursor:default}
+/* the device browser navigates with a virtual cursor, so anything
+   actionable needs a real hover affordance */
+.tile:not(.filler):hover{border-color:var(--accent)}
+#stage h2{cursor:pointer}
+#stage-body [data-row]{cursor:pointer}
+#stage-body [data-row]:hover{color:var(--accent)}
+#st-full{color:var(--dim);letter-spacing:0}
 .clk-row{display:flex;align-items:center;gap:9px}
 .clk-mid{flex:1;min-width:0}
 .clk-t{font-family:var(--mono);font-size:21px;font-weight:300;
@@ -163,7 +170,7 @@ input[type=text]:focus{border-color:var(--accent)}
     <div id="stage-wrap"><section id="stage">
       <h2><span id="stage-title"></span><span id="stage-status">
         <span id="st-link"></span><span id="st-audio"></span>
-        <span id="net"></span></span></h2>
+        <span id="net"></span><span id="st-full"></span></span></h2>
       <div class="body" id="stage-body"></div>
     </section></div>
     <div class="rail rail-v" id="rail-right"></div>
@@ -181,7 +188,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v16";
+const APP_VERSION="v17";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -560,6 +567,8 @@ function render(){
     document.getElementById("rail-left").innerHTML=left.join("");
     document.getElementById("stage-title").textContent=
       center?(center.title||center.id):"";
+    const ff=document.getElementById("st-full");
+    if(ff)ff.textContent=mode==="full"?"⤡":"⛶";
     if(center)renderCard(center);
   }
 }
@@ -634,6 +643,59 @@ addEventListener("keydown",e=>{
   e.preventDefault();
   route(k);
 });
+/* ---------------- pointer input ----------------
+   The Pocket TV's browser drives pages with a virtual mouse cursor and
+   swallows the D-pad, so arrow keys never reach us there. The bezel must
+   therefore be fully operable by pointer as well: hover moves the
+   highlight, a click opens, and a click on the already-open card's tile
+   expands it — the same contract as ◄► and OK.                        */
+function tileCardId(el){return (el.id||"").replace(/^(fr|ov)-/,"")}
+function paintSel(){
+  /* class-only repaint: a full render() during mouseover would replace the
+     element under the cursor and retrigger this handler */
+  const cur=frameCards()[selIdx];
+  document.querySelectorAll("#cockpit .tile").forEach(t=>{
+    t.classList.toggle("sel",
+      mode==="bezel"&&!!cur&&tileCardId(t)===cur.id);
+  });
+}
+function openCard(c){
+  if(!c)return;
+  if(c._active===false)c._active=true;
+  if(mode==="overview"){stageId=c.id;focusSel(c.id);mode="stage"}
+  else if(c.id===stageId)mode="full";
+  else{stageId=c.id;focusSel(c.id);mode="stage"}
+  render();
+}
+document.addEventListener("click",e=>{
+  const t=e.target;if(!t||!t.closest)return;
+  /* a row a card marked pickable — pointer equivalent of ▲▼ then OK */
+  const row=t.closest("#stage-body [data-row]");
+  if(row){
+    const c=staged(),i=+row.getAttribute("data-row");
+    if(c&&c.onPick){try{c.onPick(ctxFor(c),i)}catch(err){}}
+    return;
+  }
+  /* the stage header is the one region no card draws into, so it is a
+     safe permanent target for the fullscreen toggle */
+  if(t.closest("#stage h2")){
+    mode=(mode==="full")?"bezel":"full";render();return;
+  }
+  const tile=t.closest(".tile");
+  if(tile&&!tile.classList.contains("filler")){
+    const c=CARDS.find(x=>x.id===tileCardId(tile));
+    if(c)openCard(c);
+  }
+});
+document.addEventListener("mouseover",e=>{
+  if(mode!=="bezel")return;
+  const t=e.target;if(!t||!t.closest)return;
+  const tile=t.closest("#cockpit .tile");
+  if(!tile||tile.classList.contains("filler"))return;
+  const i=frameCards().findIndex(c=>c.id===tileCardId(tile));
+  if(i>=0&&i!==selIdx){selIdx=i;paintSel()}
+});
+
 function route(k){
   if(mode==="overview"){
     /* columns must match what the grid actually rendered (auto-fill at
@@ -945,7 +1007,8 @@ const cardHeadlines={
     return items.map((it,i)=>{
       const c=srcColor(it.source);
       return "<div class='hl"+(i===this.sel?" sel":"")+
-        "' style='border-left:3px solid "+c+";padding-left:10px'>"+
+        "' data-row='"+i+"'"+
+        " style='border-left:3px solid "+c+";padding-left:10px'>"+
         esc(it.title)+
         "<span class='src' style='color:"+c+"'>"+
         esc(it.source||"")+"</span></div>";
@@ -964,7 +1027,8 @@ const cardHeadlines={
       return true}
     if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
     return false;
-  }
+  },
+  onPick(ctx,i){this.sel=i;ctx.rerender()}
 };
 function esc(s){return String(s||"").replace(/[<>&]/g,
   c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}
@@ -1004,7 +1068,8 @@ const cardRadio={
     return list.map((st,i)=>{
       const now=cur&&cur.url===st.url;
       const rc=srcColor(st.region);
-      return "<div class='row"+(i===this.sel?" hl sel":"")+"'>"+
+      return "<div class='row"+(i===this.sel?" hl sel":"")+
+        "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+
         (now?"<span style='color:var(--up)'>▶ </span>":"")+
         esc(st.label)+"</span>"+
@@ -1031,6 +1096,11 @@ const cardRadio={
       return true;
     }
     return false;
+  },
+  onPick(ctx,i){
+    const list=this._list(ctx,this._data);
+    if(!list[i])return;
+    this.sel=i;ctx.audio.toggle(list[i]);render();
   }
 };
 
@@ -1104,7 +1174,7 @@ const cardVis={
   },
   render(ctx){
     const cur=ctx.audio.current();
-    return "<canvas id='vis-cv' style='width:100%;height:230px;"+
+    return "<canvas id='vis-cv' data-row='0' style='width:100%;height:230px;"+
       "display:block'></canvas>"+
       "<div class='state' style='display:flex;justify-content:"+
       "space-between;margin-top:8px'><span id='vis-tag'>"+
@@ -1116,13 +1186,15 @@ const cardVis={
       "<span class='lbl'>"+(ctx.audio.playing()?"live":"idle")+"</span>";
   },
   onKey(ctx,k){
-    if(k==="enter"){
-      this.styleIdx=(this.styleIdx+1)%VIS_STYLES.length;
-      ctx.storage.set("style",this.styleIdx);
-      ctx.rerender();return true;
-    }
+    if(k==="enter"){this._cycle(ctx);return true}
     return false;
-  }
+  },
+  _cycle(ctx){
+    this.styleIdx=(this.styleIdx+1)%VIS_STYLES.length;
+    ctx.storage.set("style",this.styleIdx);
+    ctx.rerender();
+  },
+  onPick(ctx){this._cycle(ctx)}
 };
 
 
@@ -1248,7 +1320,8 @@ const cardLaunch={
     const links=this._links(ctx);
     return links.map((l,i)=>{
       let host="";try{host=new URL(l.url).hostname}catch(e){}
-      return "<div class='row"+(i===this.sel?" hl sel":"")+"'>"+
+      return "<div class='row"+(i===this.sel?" hl sel":"")+
+        "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+esc(l.label)+
         "</span><span style='color:"+srcColor(host)+
         ";font-size:12px'>"+esc(host)+"</span></div>";
@@ -1276,6 +1349,12 @@ const cardLaunch={
     }
     return false;
   },
+  onPick(ctx,i){
+    const links=this._links(ctx);
+    if(!links[i])return;
+    this.sel=i;
+    try{location.assign(links[i].url)}catch(e){}
+  },
   init(ctx){
     document.addEventListener("change",e=>{
       if(e.target&&e.target.id==="launch-in"&&e.target.value.trim()){
@@ -1295,7 +1374,8 @@ const cardScenes={
     const list=allScenes();
     return list.map((sc,i)=>{
       const on=sc.id===currentScene;
-      return "<div class='row"+(i===this.sel?" hl sel":"")+"'>"+
+      return "<div class='row"+(i===this.sel?" hl sel":"")+
+        "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+
         (on?"● ":"")+esc(sc.name)+"</span>"+
         "<span class='lbl'>"+esc(sc.palette||"")+"</span></div>";
@@ -1314,6 +1394,10 @@ const cardScenes={
     if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
     if(k==="enter"){applyScene(list[this.sel]);return true}
     return false;
+  },
+  onPick(ctx,i){
+    const list=allScenes();
+    if(list[i]){this.sel=i;applyScene(list[i])}
   }
 };
 
@@ -1321,8 +1405,9 @@ const cardSystem={
   id:"system",title:"SYSTEM",icon:"gear",
   pane:"system",size:"large",order:90,refresh:null,offline:"cached",
   render(ctx){
-    const chips=Object.keys(THEMES).map(n=>"<span class='chip"+
-      (n===ctx.theme()?" on":"")+"'>"+n+"</span>").join("");
+    const chips=Object.keys(THEMES).map((n,i)=>"<span class='chip"+
+      (n===ctx.theme()?" on":"")+"' data-row='"+i+"'>"+n+
+      "</span>").join("");
     return "<div class='lbl'>palette — OK cycles</div>"+
       "<div class='chips'>"+chips+"</div>"+
       "<div class='lbl' style='margin-top:16px'>feed relay "+
@@ -1348,6 +1433,10 @@ const cardSystem={
       ctx.setTheme(next);render();return true;
     }
     return false;
+  },
+  onPick(ctx,i){
+    const names=Object.keys(THEMES);
+    if(names[i]){ctx.setTheme(names[i]);render()}
   },
   init(ctx){
     document.addEventListener("change",e=>{
