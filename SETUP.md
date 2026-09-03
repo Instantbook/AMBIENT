@@ -1,4 +1,4 @@
-# AMBIENT v5 — cockpit + audio + scenes + companion + Claude (steps 1–4, 6–9)
+# AMBIENT v11 — cockpit + audio + scenes + companion + Claude (steps 1–4, 6–9)
 
 Single-file PWA, same deployment family as LEXIS/ΝΟΥΣ.
 
@@ -7,7 +7,7 @@ Single-file PWA, same deployment family as LEXIS/ΝΟΥΣ.
 2. Drop in: `index.html`, `companion.html`, `sw.js`, `manifest.json`, `icon.png`.
 3. Settings → Pages → deploy from main branch root.
 4. Open the Pages URL on the Pocket TV browser; add to home screen if offered.
-5. Version bumps: change BOTH `APP_VERSION` in index.html AND `CACHE` in sw.js (now v5/ambient-v5).
+5. Version bumps: change BOTH `APP_VERSION` in index.html AND `CACHE` in sw.js (now v11/ambient-v11).
 
 ## What's in this build
 - Cockpit layout for the worn big screen: everything visible at once —
@@ -66,6 +66,39 @@ GET /feeds  →  [ { "title": "...", "source": "...", "link": "..." }, ... ]
   the paired phone or the on-screen TV keyboard. Requests go to YOUR Worker's
   /claude endpoint — your Anthropic API key lives there as a secret and never
   exists client-side. Last 20 messages persist locally.
+
+- v7 VISUAL LANGUAGE — semantic color: the frame stays quiet HUD monotone;
+  color lives in the DATA. Weather: condition icons (sun/cloud/rain/snow/
+  storm) + temperatures on a cold-blue→hot-red scale. Clock: colored sun/moon
+  per city. Markets: values and deltas in up-green/down-red + per-symbol
+  sparklines built from refresh history (fills in after a few ticks).
+  Headlines: per-source identity color on bar + source tag. Radio: region
+  colors, green play marker. Visualizer: spectrum-colored — hue follows
+  frequency band, brightness follows level.
+- v9 LAYOUT — 100-inch bezel: 20 EQUAL squares surround the stage — 4 per
+  side plus one at each corner (6 across top, 4 down each side, 6 across
+  bottom). Tiles sized for the big virtual screen (clamp 118-176px);
+  widescreen rows spread edge-to-edge with even spacing, and the stage takes
+  the wide middle. Zero chrome: no status bar, menu, or hint footer. Stage
+  header carries the only indicators: OFFLINE (when offline), ♪ now-playing,
+  LINK room code. Controls help + status live in the system card.
+- PINNED CARDS (new shell concept): a card with pinned:true sits in a fixed
+  frame slot, never rotates, never takes the stage, always visible, immune to
+  scene deactivation. The CLOCK is pinned top-left corner — dual-city time
+  with sun/moon is now permanent glanceable furniture, not a stage tenant.
+  Real ring cards fill remaining slots clockwise; dashed fillers pad to 20.
+- v10: clock corner tile redesigned — per-city rows: sun/moon glyph, 21px
+  time, city name (EDMONTON / ATHENS), and a live seconds-sweep micro-arc,
+  divided by a dotted rule. Weather tile matches: condition icon, big
+  temperature on the cold→hot scale, city + lo/hi per row. Porto Cheli
+  timezone/labels renamed to ATHENS throughout.
+- v11: LAUNCH card (web pane) — the web-first home Google TV doesn't offer.
+  User bookmarks list; OK opens the site full-screen in the browser, BACK
+  returns to AMBIENT (state persists, shell is SW-cached). Add sites on the
+  glasses ("url" or "label|url" via the field) or from the phone: paste a
+  link into TYPE TO SCREEN and press "Send as link" — it lands in LAUNCH
+  automatically. Ships with YOUTUBE and WIKIPEDIA starter bookmarks; 12 max,
+  hostname identity colors.
 
 ## Worker deployment (required for feeds, companion, Claude)
 `ambient-worker.js` is the reference implementation: /ws relay (Durable
