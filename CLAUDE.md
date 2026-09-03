@@ -225,33 +225,51 @@ The same Worker proxies `/claude` (holds `ANTHROPIC_API_KEY` as a Worker secret;
 `/feeds` (server-side RSS fetch + regex parse, keeping the client CORS-clean). The `wrangler.toml`
 template is in the comment block at the bottom of `ambient-worker.js`.
 
-## Where things stand (end of the 2026-09-02 session)
+## Where things stand (2026-09-03)
 
-Running **v24** on the device, inside the `app/` wrapper, with the Worker URL configured.
+Running **v25** on the device inside the `app/` wrapper, Worker configured. Everything on the roadmap is
+now verified on hardware.
 
-**Verified working on hardware:** D-pad tile navigation · OK to open · OK-again fullscreen · clock ·
-weather · markets · headlines (live, both sources) · CLAUDE (asked and answered through the Worker on the
-glasses) · radio audio for the https presets, with the real-FFT visualizer · scenes · launch · system ·
-the `/ws` companion relay connecting (`LINK <room>` in the stage header).
+**Working, confirmed on the device:** D-pad tile navigation (spatial) · OK opens · OK-again fullscreen ·
+clock · weather · markets · headlines (12, two sources) · **CLAUDE asked and answered on the glasses, and
+the reply is audible** — `speechSynthesis` does work in this WebView · **Greek radio playing with the real
+FFT visualiser** · scenes · launch · system · **the phone companion relay, driven end-to-end**.
 
-**Not yet done, in the order agreed:**
+### The radio fix was a better source, not a proxy
 
-1. **Audio proxy for http radio.** 7 of 8 top Greek stations on radio-browser are plain `http`, the page is
-   `https`, and Chromium blocks mixed-content media — the streams themselves are alive (verified
-   `200 audio/mpeg`). `MIXED_CONTENT_COMPATIBILITY_MODE` is in the wrapper but is probably the wrong tool,
-   since "compatibility" means *behave like a modern browser* and modern Chromium blocks mixed audio
-   outright; **this was never confirmed either way — verify before building on it.** The agreed fix is a
-   Worker `/stream?url=…` passthrough: works in any browser rather than only the APK, needs no security
-   relaxation, and arriving same-origin would also give the Greek stations real FFT instead of the
-   synthetic fallback. Open question: Cloudflare's tolerance for long-lived streaming connections.
-   The one-line alternative is `MIXED_CONTENT_ALWAYS_ALLOW`, which also re-permits http *scripts* — a real
-   downgrade, deliberately not taken.
-2. **greek-radio.gr as a curated station source.** Bigger than a patch: a `/radio` endpoint in the Worker
-   that fetches and parses it, a station schema carrying genre/region so the card can group them, and
-   probably a favourites list in localStorage.
-3. **Phone companion** — deployed and connecting, never actually paired from a phone.
-4. Whether `speechSynthesis` really speaks replies aloud in the WebView. TTS (`com.google.android.tts`) is
-   installed and the card reports `voice ON`, but it has only ever been seen, not heard.
+The planned Worker audio proxy turned out to be unnecessary. radio-browser.info returns Greek stations on
+their **http** hostnames, which Chromium blocks as mixed content on an https page; greek-radio.gr lists the
+same stations on their **https** hostnames (`http://netradio.live24.gr/realfm` →
+`https://realfm.live24.gr/realfm`). Those hosts also send `Access-Control-Allow-Origin`, so the stations
+are `cors:true` and drive the real analyser rather than the synthetic fallback.
+
+`GET /radio` parses the site's `data-stream-url` cards into `{label,url,city,meta,logo,link}` — 24 stations
+across Αθήνα, Θεσσαλονίκη, Πάτρα, Χαλκίδα, Ηράκλειο, Μυτιλήνη. `?path=` browses the site's own taxonomy
+(`genre/ambient`, `crete/chania`, `central-macedonia/thessaloniki`), validated against a strict pattern so
+it can only ever walk that host. **`?path=` is implemented and deployed but no card uses it yet** — that's
+the obvious next feature, along with a favourites list.
+
+### Testing the companion without a phone
+
+The relay can be driven from this machine, which is how it was verified — no phone needed:
+
+```js
+const ws = new WebSocket("wss://ambient-worker.dbazos1.workers.dev/ws?room=<ROOM>&role=remote");
+ws.onopen = () => ws.send(JSON.stringify({t:"action", id:"stage.weather"}));
+// also: {t:"key",k:"down"} · {t:"text",v:"..."} · {t:"inject",kind:"chat",v:"..."}
+```
+
+The room code is in the SYSTEM card and the stage header (`LINK xxxxx`), and **changes on every
+`pm clear`**. To pair a real phone: open `https://instantbook.github.io/AMBIENT/companion.html`, enter the
+room code and the Worker URL once.
+
+### Still open
+
+- No card browses `/radio?path=` yet (genre/city listings), and there are no favourites.
+- `adb shell input tap` is unreliable on the right-hand tiles; arrow-key navigation is the dependable way
+  to drive the device from a script.
+- The `MIXED_CONTENT_COMPATIBILITY_MODE` line in the wrapper is now moot for radio and was never confirmed
+  to do anything. Harmless, but don't treat it as load-bearing.
 
 ### Provisioning the device after a wipe
 
