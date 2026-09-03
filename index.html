@@ -102,6 +102,7 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 /* word-shaped values ("ALL PANELS", "day-cyan") need to step down a size
    or they ellipsise inside a 118px tile */
 .tv.sm{font-size:13px;letter-spacing:.03em}
+.tl.sub{-webkit-line-clamp:1;opacity:.7;margin-top:2px;font-size:9px}
 .tl{font-size:10px;letter-spacing:.07em;color:var(--dim);margin-top:4px;
   line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;
   -webkit-box-orient:vertical;overflow:hidden}
@@ -219,7 +220,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v25";
+const APP_VERSION="v26";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -247,7 +248,7 @@ function applyTheme(name){
    the analyser abstraction returns synthetic motion instead.     */
 const audioBus=(()=>{
   const el=(typeof Audio!=="undefined")?new Audio():null;
-  let ac=null,analyser=null,wired=false,current=null,synthT=0;
+  let ac=null,analyser=null,wired=false,current=null,synthT=0,bins=null;
   /* a stream that will not start must say so — mixed-content blocking and
      dead stations both fail as a silently rejected play() promise */
   let failedUrl=null;
@@ -260,7 +261,16 @@ const audioBus=(()=>{
   function wire(){ /* once, only for cors-clean sources */
     if(wired||!el)return;
     try{
-      ac=new (window.AudioContext||window.webkitAudioContext)();
+      /* latencyHint is the whole ballgame on a box like this. The default
+         is "interactive", which asks for the SMALLEST buffer the platform
+         will give — right for a game, wrong for radio, and on a low-power
+         Amlogic TV box any scheduling jitter then under-runs the render
+         quantum and you hear it as stutter even with the CPU 78% idle
+         (measured: 313% of 400% idle while stuttering). "playback" asks
+         for the largest buffer instead; we do not care about latency when
+         the nearest thing to an input is pressing OK on a station. */
+      ac=new (window.AudioContext||window.webkitAudioContext)(
+        {latencyHint:"playback"});
       const src=ac.createMediaElementSource(el);
       analyser=ac.createAnalyser();analyser.fftSize=128;
       src.connect(analyser);analyser.connect(ac.destination);
@@ -296,7 +306,12 @@ const audioBus=(()=>{
     getLevels(arr){
       if(current&&wired&&analyser&&current.cors){
         try{
-          const raw=new Uint8Array(analyser.frequencyBinCount);
+          /* reused, not reallocated — this runs every animation frame and
+             a fresh typed array per frame is pure GC pressure on the same
+             main thread the audio graph is scheduled from */
+          if(!bins||bins.length!==analyser.frequencyBinCount)
+            bins=new Uint8Array(analyser.frequencyBinCount);
+          const raw=bins;
           analyser.getByteFrequencyData(raw);
           let sum=0;
           for(let i=0;i<arr.length;i++){
@@ -582,6 +597,7 @@ function face(value,label,opts){
   return "<div class='tv"+(sm?" sm":"")+"'"+
     (opts.color?" style='color:"+opts.color+"'":"")+">"+v+"</div>"+
     (label?"<div class='tl'>"+label+"</div>":"")+
+    (opts.sub?"<div class='tl sub'>"+opts.sub+"</div>":"")+
     (opts.dots&&opts.dots.length
       ? "<div class='dots'>"+opts.dots.slice(0,8).map(c=>
           "<i style='background:"+c+"'></i>").join("")+"</div>"
@@ -1252,7 +1268,8 @@ const cardRadio={
     const gr=(Array.isArray(raw)?raw:[])
       .filter(s=>s&&s.url)
       .map(s=>({label:String(s.label||"STATION").trim().slice(0,30),
-        url:s.url,cors:true,region:(s.city||"greece").trim()}))
+        url:s.url,cors:true,region:(s.city||"greece").trim(),
+        meta:String(s.meta||"").trim()}))
       .sort((a,b)=>a.region.localeCompare(b.region,"el")||
                    a.label.localeCompare(b.label,"el"));
     return RADIO_PRESETS.concat(gr);
@@ -1275,7 +1292,7 @@ const cardRadio={
         esc(st.label)+"</span>"+
         "<span style='color:"+rc+";font-size:12px'>"+
         (insecure?"<span class='lbl' style='margin-right:8px'>http</span>":"")+
-        st.region+"</span></div>";
+        esc(st.meta||st.region)+"</span></div>";
     }).join("")+
     "<div class='state' style='margin-top:10px'>"+
     (ctx.audio.failed()?"⚠ that stream would not start — it may be "+
@@ -1285,7 +1302,8 @@ const cardRadio={
   },
   renderCompact(ctx){
     const cur=ctx.audio.current();
-    if(cur)return face("▶",esc(cur.label),{color:"var(--up)"});
+    if(cur)return face("▶",esc(cur.label),
+      {color:"var(--up)",sub:esc(cur.region||"")});
     const list=this._list(ctx,this._data);
     const regions=[];
     list.forEach(s=>{if(regions.indexOf(s.region)<0)regions.push(s.region)});
@@ -1357,20 +1375,31 @@ const cardVis={
   styleIdx:0,_raf:null,_levels:new Float32Array(32),
   init(ctx){
     this.styleIdx=ctx.storage.get("style",0)%VIS_STYLES.length;
-    const loop=()=>{
-      this._draw(ctx);
+    let last=0;
+    /* The old loop ran at 60fps forever, including the whole time the
+       visualiser was not even on stage. Now: ~30fps while it is visible
+       (ample for a spectrum), and a lazy poll when it is not, so a card
+       nobody is looking at costs nothing while audio plays. */
+    const tick=ts=>{
+      const cv=document.getElementById("vis-cv");
+      if(!cv){this._raf=setTimeout(tick,500);return}
+      if(!ts||ts-last>=33){last=ts||0;this._draw(ctx,cv)}
       this._raf=(window.requestAnimationFrame||
-        (f=>setTimeout(f,50)))(loop);
+        (f=>setTimeout(f,33)))(tick);
     };
-    loop();
+    tick();
   },
-  _draw(ctx){
-    const cv=document.getElementById("vis-cv");
+  _draw(ctx,cv){
+    cv=cv||document.getElementById("vis-cv");
     if(!cv)return;
     let g=null;try{g=cv.getContext&&cv.getContext("2d")}catch(e){}
     if(!g)return;
-    const w=cv.width=cv.clientWidth||600;
-    const h=cv.height=cv.clientHeight||220;
+    /* Assigning canvas.width reallocates and clears the backing store, and
+       reading clientWidth forces layout — doing both every frame was the
+       single most expensive thing on screen. Only resize when it changed. */
+    const w=cv.clientWidth||600,h=cv.clientHeight||220;
+    if(cv.width!==w)cv.width=w;
+    if(cv.height!==h)cv.height=h;
     g.clearRect(0,0,w,h);
     const real=ctx.audio.getLevels(this._levels);
     VIS_STYLES[this.styleIdx].draw(g,w,h,this._levels);
