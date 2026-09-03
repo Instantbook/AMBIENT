@@ -189,7 +189,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v20";
+const APP_VERSION="v21";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -841,6 +841,19 @@ function route(k){
     }
     const c=staged();
     if(c&&c.onKey){try{if(c.onKey(ctxFor(c),k)===true)return}catch(e){}}
+    /* The router consumes every arrow, so a card's text field was
+       unreachable with a remote — the Worker URL, the LAUNCH "add site" box
+       and the CLAUDE prompt could only be filled from the phone. If the card
+       did not want ▼, hand it to the first text field in the stage; the
+       keydown handler above already lets BACK blur out again. */
+    if(k==="down"){
+      const inp=document.querySelector("#stage-body input[type=text]");
+      if(inp&&document.activeElement!==inp){
+        try{inp.focus({preventScroll:true})}catch(e){try{inp.focus()}catch(e2){}}
+        if(inp.scrollIntoView)try{inp.scrollIntoView({block:"nearest"})}catch(e){}
+        return;
+      }
+    }
     return;
   }
 
@@ -1534,7 +1547,7 @@ const cardSystem={
     return "<div class='lbl'>palette — OK cycles</div>"+
       "<div class='chips'>"+chips+"</div>"+
       "<div class='lbl' style='margin-top:16px'>feed relay "+
-      "(Cloudflare Worker URL)</div>"+
+      "(Cloudflare Worker URL) — ▼ to edit, BACK when done</div>"+
       "<input type='text' id='worker-in' value='"+esc(WORKER_BASE())+
       "' placeholder='https://your-worker.workers.dev'>"+
       "<div class='lbl' style='margin-top:14px'>"+APP_VERSION+
