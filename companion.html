@@ -64,7 +64,12 @@ input:focus,textarea:focus{border-color:var(--accent)}
     <button onclick="key('enter')">OK</button>
     <button onclick="key('right')">►</button>
     <span></span><button onclick="key('down')">▼</button><span></span>
-    <button class="wide" onclick="key('back')">BACK · OVERVIEW</button>
+    <button class="wide" onclick="key('back')">BACK</button>
+  </div>
+  <div class="row2">
+    <button onclick="act('view.full')">FULLSCREEN</button>
+    <button onclick="act('view.bezel')">TILES</button>
+    <button onclick="act('view.overview')">OVERVIEW</button>
   </div>
 </div>
 
@@ -113,6 +118,9 @@ input:focus,textarea:focus{border-color:var(--accent)}
     <button onclick="act('stage.claude')">claude</button>
     <button onclick="act('stage.radio')">radio</button>
     <button onclick="act('stage.vis')">visual</button>
+    <button onclick="act('stage.launch')">launch</button>
+    <button onclick="act('stage.scenes')">scenes</button>
+    <button onclick="act('stage.system')">system</button>
   </div>
 </div>
 <div id="log"></div>

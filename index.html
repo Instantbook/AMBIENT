@@ -92,9 +92,17 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
   flex:1;display:flex;flex-direction:column;justify-content:center;
   overflow:hidden}
 .tile .tbody .val{color:var(--ink)}
+/* sel = where the highlight is right now; staged = what the main window
+   is showing. They are different states and must read differently. */
 .tile.sel{border-color:var(--accent);background:var(--accent-soft)}
 .tile.sel h3{color:var(--accent)}
+.tile.staged{border-left:3px solid var(--accent)}
 .tile.off{opacity:.32}
+/* fullscreen: collapse the grid to the stage; rails stay in the DOM so
+   renderCard() can keep refreshing their tiles behind the scenes */
+#cockpit.full{grid-template-areas:"s";grid-template-rows:1fr;
+  grid-template-columns:1fr}
+#cockpit.full .rail{display:none}
 /* overview mode */
 #cockpit.overview{grid-template-columns:1fr}
 #cockpit.overview #stage-wrap,{display:none}
@@ -173,7 +181,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v15";
+const APP_VERSION="v16";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -292,9 +300,11 @@ function applyScene(sc){
     c._active=cfg.active!==false||c.id==="scenes"||c.pinned===true;
     try{c.onScene&&c.onScene(ctxFor(c),cfg.config||{})}catch(e){}
   });
-  const act=ringCards();
-  const si=Math.max(0,act.findIndex(c=>c.id===sc.stage));
-  centerIdx=si;mode="stage";
+  stageId=sc.stage;
+  if(!frameCards().some(c=>c.id===stageId))
+    stageId=(frameCards()[0]||{}).id;
+  focusSel(stageId);
+  mode="bezel";
   render();
 }
 
@@ -340,8 +350,8 @@ const companion=(()=>{
     if(m.t==="key"&&["up","down","left","right","enter","back"]
       .includes(m.k))route(m.k);
     else if(m.t==="text"){
-      const c=ring(centerIdx);
-      if(c.onText){try{c.onText(ctxFor(c),String(m.v||""))}catch(e){}}
+      const c=staged();
+      if(c&&c.onText){try{c.onText(ctxFor(c),String(m.v||""))}catch(e){}}
     }
     else if(m.t==="action"){
       const v=String(m.id||"");
@@ -349,8 +359,18 @@ const companion=(()=>{
         applyScene(allScenes().find(x=>x.id===v.slice(6)));
       else if(v.startsWith("theme."))applyTheme(v.slice(6));
       else if(v.startsWith("stage.")){
-        const i=ringCards().findIndex(c=>c.id===v.slice(6));
-        if(i>=0){centerIdx=i;mode="stage";render()}
+        const id=v.slice(6);
+        if(frameCards().some(c=>c.id===id)){
+          stageId=id;focusSel(id);mode="stage";render();
+        }
+      }
+      /* the phone is the only place fullscreen is reachable in one tap */
+      else if(v==="view.full"){mode="full";render()}
+      else if(v==="view.bezel"){mode="bezel";render()}
+      else if(v==="view.overview"){
+        mode="overview";
+        ovSel=Math.max(0,visibleCards().findIndex(c=>c.id===stageId));
+        render();
       }
     }
     else if(m.t==="inject"){
@@ -378,10 +398,18 @@ const companion=(()=>{
   return{connect,code:()=>code,state:()=>state};
 })();
 
-/* ---------------- shell state ---------------- */
+/* ---------------- shell state ----------------
+   The bezel is a launcher of FIXED tiles, not a carousel. Before, ◄►
+   rotated the whole ring so every tile changed position on every press,
+   which made the frame impossible to build spatial memory for. Now each
+   card keeps a permanent slot, ◄► walk a highlight around the perimeter
+   (◄ counterclockwise, ► clockwise), and OK loads the highlighted card
+   into the main window — pressing OK on the card that is already loaded
+   expands it to fullscreen.                                            */
 let CARDS=[];
-let centerIdx=0;            /* which card holds the stage */
-let mode="stage";           /* "stage" | "overview" */
+let stageId=null;           /* id of the card in the main window */
+let selIdx=0;               /* highlighted slot, clockwise from top-left */
+let mode="bezel";           /* "bezel" | "stage" | "full" | "overview" */
 let ovSel=0;                /* overview selection */
 let online=navigator.onLine;
 const bus={};
@@ -427,17 +455,34 @@ function registerCards(list){
     console.warn("init fail",c.id,e)}});
 }
 function activeCards(){return CARDS.filter(c=>c._active!==false)}
-/* ring = rotatable cards only; pinned cards live in fixed frame slots */
 function ringCards(){return activeCards().filter(c=>!c.pinned)}
 function pinnedCards(){return activeCards().filter(c=>c.pinned)}
-/* visible = overview set (pinned are always on screen already) */
-function visibleCards(){return CARDS.filter(c=>!c.pinned)}
-const ring=i=>{const a=ringCards();
-  return a[((i%a.length)+a.length)%a.length]};
+function visibleCards(){return CARDS.slice()}
+/* frameCards() is the authoritative slot order: pinned first (they hold
+   the corner), then the rest, laid out clockwise from the top-left. It is
+   also the order ◄► walk, so screen position and key order always agree.
+   "pinned" now means "fixed slot + immune to scene deactivation" — such a
+   card can still be opened in the main window like any other. */
+function frameCards(){return pinnedCards().concat(ringCards())}
+function staged(){
+  const all=frameCards();
+  return all.find(c=>c.id===stageId)||all[0]||CARDS[0];
+}
+function selectedCard(){return frameCards()[selIdx]}
+function stagedIs(card){const s=staged();return !!s&&s.id===card.id}
+function moveSel(d){
+  const n=frameCards().length;
+  if(n)selIdx=((selIdx+d)%n+n)%n;
+}
+function focusSel(id){
+  const i=frameCards().findIndex(c=>c.id===id);
+  if(i>=0)selIdx=i;
+}
 
 /* ---------------- render: cockpit ---------------- */
-function tileHTML(card,sel,tag){
-  return "<div class='tile"+(sel?" sel":"")+"' id='"+tag+"-"+card.id+
+function tileHTML(card,sel,tag,isStaged){
+  return "<div class='tile"+(sel?" sel":"")+(isStaged?" staged":"")+
+    "' id='"+tag+"-"+card.id+
     "'><h3>"+(card.title||card.id)+"</h3><div class='tbody'>"+
     compactOf(card)+"</div></div>";
 }
@@ -482,26 +527,28 @@ function fillerHTML(n){
 }
 function render(){
   const cp=document.getElementById("cockpit");
-  const center=ring(centerIdx);
+  const center=staged();
   if(mode==="overview"){
+    cp.classList.remove("full");
     cp.classList.add("overview");
     const ov=document.getElementById("overview");
     ov.innerHTML=visibleCards().map((c,i)=>{
-      const t=tileHTML(c,i===ovSel,"ov");
+      const t=tileHTML(c,i===ovSel,"ov",c.id===stageId);
       return c._active===false?
         t.replace("class='tile","class='tile off"):t;
     }).join("");
   }else{
     cp.classList.remove("overview");
-    /* frame: pinned cards anchor from the top-left corner, then the
-       ring clockwise, then fillers — sized to whatever the viewport fits. */
+    /* fullscreen collapses the grid to the stage alone; the rails stay in
+       the DOM (so renderCard can still refresh their tiles) but are hidden */
+    cp.classList.toggle("full",mode==="full");
     const F=frameGeom();
-    const slots=pinnedCards().map(c=>tileHTML(c,false,"fr"));
-    const rc=ringCards();
-    for(let k=1;k<rc.length;k++)slots.push(tileHTML(ring(centerIdx+k),
-      false,"fr"));
+    const cards=frameCards();
+    /* every card holds a permanent slot — the highlight moves, not the tiles */
+    const slots=cards.map((c,i)=>
+      tileHTML(c,mode==="bezel"&&i===selIdx,"fr",c.id===stageId));
     while(slots.length<F.total)slots.push(fillerHTML(slots.length));
-    slots.length=F.total;
+    slots.length=Math.max(F.total,cards.length);
     let i=0;
     const top=slots.slice(i,i+=F.perRow);
     const right=slots.slice(i,i+=F.perSide);
@@ -512,13 +559,13 @@ function render(){
     document.getElementById("rail-bottom").innerHTML=bottom.join("");
     document.getElementById("rail-left").innerHTML=left.join("");
     document.getElementById("stage-title").textContent=
-      center.title||center.id;
-    renderCard(center);
+      center?(center.title||center.id):"";
+    if(center)renderCard(center);
   }
 }
 function renderCard(card){
-  /* stage body if this card holds the stage */
-  if(mode==="stage"&&ring(centerIdx).id===card.id){
+  /* stage body if this card is the one loaded in the main window */
+  if(mode!=="overview"&&stagedIs(card)){
     const host=document.getElementById("stage-body");
     try{
       const out=card.render(ctxFor(card),card._data||{});
@@ -571,8 +618,10 @@ addEventListener("resize",()=>{clearTimeout(_rz);
   _rz=setTimeout(()=>render(),120)});
 
 /* ---------------- input router ----------------
-   stage: ◄► rotate stage · ▲▼/OK inside card · BACK overview
-   overview: arrows select · OK zoom in · BACK cancel        */
+   bezel:    ◄► walk tiles ccw/cw · OK open (again = fullscreen)
+             BACK overview
+   main/full: ▲▼/OK act inside the card · ◄► move on · BACK bezel
+   overview:  arrows select · OK open · BACK bezel            */
 addEventListener("keydown",e=>{
   if(e.target&&e.target.tagName==="INPUT"){
     if(e.key==="Escape"||e.key==="GoBack"){e.target.blur();e.preventDefault()}
@@ -600,27 +649,43 @@ function route(k){
       const card=visibleCards()[ovSel];
       if(!card)return;
       if(card._active===false)card._active=true; /* ad-hoc reactivate */
-      const ai=ringCards().findIndex(c=>c.id===card.id);
-      centerIdx=ai<0?0:ai;mode="stage";
+      stageId=card.id;focusSel(card.id);mode="stage";
     }
-    else if(k==="back")mode="stage";
+    else if(k==="back")mode="bezel";
     render();return;
   }
-  const center=ring(centerIdx);
-  if(k==="up"||k==="down"||k==="enter"){
-    if(center.onKey){
-      let consumed=false;
-      try{consumed=center.onKey(ctxFor(center),k)===true}catch(e){}
-      if(consumed)return;
+
+  /* --- main window has focus (loaded or fullscreen) --- */
+  if(mode==="stage"||mode==="full"){
+    if(k==="back"){mode="bezel";render();return}
+    if(k==="left"||k==="right"){
+      moveSel(k==="left"?-1:1);
+      /* fullscreen browses card-to-card in place; the windowed view hands
+         focus back to the bezel so you can keep looking around */
+      if(mode==="full")stageId=selectedCard().id; else mode="bezel";
+      render();return;
     }
+    const c=staged();
+    if(c&&c.onKey){try{if(c.onKey(ctxFor(c),k)===true)return}catch(e){}}
     return;
   }
-  if(k==="left"){centerIdx--;render()}
-  else if(k==="right"){centerIdx++;render()}
-  else if(k==="back"){mode="overview";
-    const cur=ring(centerIdx);
-    ovSel=Math.max(0,visibleCards().findIndex(c=>c.id===cur.id));
-    render()}
+
+  /* --- bezel has focus: walk the tiles, OK opens --- */
+  if(k==="left"||k==="right"){moveSel(k==="left"?-1:1);render();return}
+  if(k==="enter"){
+    const c=selectedCard();
+    if(!c)return;
+    /* OK on the card that is already loaded expands it instead of
+       reloading it — that is the only route to fullscreen from the remote */
+    if(c.id===stageId)mode="full";
+    else{stageId=c.id;mode="stage"}
+    render();return;
+  }
+  if(k==="back"){
+    mode="overview";
+    ovSel=Math.max(0,visibleCards().findIndex(c=>c.id===stageId));
+    render();
+  }
 }
 
 /* ============================================================
@@ -1267,8 +1332,10 @@ const cardSystem={
       "<div class='lbl' style='margin-top:14px'>"+APP_VERSION+
       " · cards "+CARDS.length+" · "+(online?"online":"offline")+
       " · room "+esc(companion.code())+"</div>"+
-      "<div class='state' style='margin-top:10px'>◄ ► cycle stage · "+
-      "▲ ▼ / OK inside card · BACK overview</div>";
+      "<div class='state' style='margin-top:10px'>"+
+      "◄ ► walk tiles · OK open · OK again fullscreen<br>"+
+      "in a card: ▲ ▼ / OK act · BACK back to tiles · BACK again "+
+      "overview</div>";
   },
   renderCompact(ctx){
     return "<span class='val'>"+ctx.theme()+"</span><br>"+
@@ -1304,7 +1371,7 @@ document.addEventListener("change",e=>{
 applyScene(allScenes().find(sc=>sc.id===currentScene)||SCENES[0]);
 setOnline(navigator.onLine);
 companion.connect();
-on("companion",()=>{const c=ring(centerIdx);
+on("companion",()=>{const c=staged();
   if(c&&c.id==="claude")renderCard(c)});
 on("audio",p=>{
   const el=document.getElementById("st-audio");
