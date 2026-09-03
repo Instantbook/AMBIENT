@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Build the AMBIENT WebView wrapper APK without gradle.
+#
+# Only the SDK build-tools and the JDK bundled with Android Studio are used,
+# so there is no gradle wrapper, no daemon and nothing to download. Run from
+# the repo root:  bash app/build.sh
+set -euo pipefail
+
+SDK="$LOCALAPPDATA/Android/Sdk"
+BT="$SDK/build-tools/35.0.0"
+JBR="/c/Program Files/Android/Android Studio1/jbr/bin"
+ANDROID_JAR="$SDK/platforms/android-35/android.jar"
+
+# d8.bat and apksigner.bat are Windows batch wrappers that shell out to java,
+# so they need JAVA_HOME in native Windows form - a POSIX path silently fails
+# with "JAVA_HOME is not set".
+export JAVA_HOME='C:\Program Files\Android\Android Studio1\jbr'
+
+cd "$(dirname "$0")"
+OUT=build
+rm -rf "$OUT"; mkdir -p "$OUT/gen" "$OUT/obj" "$OUT/res"
+
+echo "==> aapt2 compile (resources)"
+"$BT/aapt2.exe" compile --dir res -o "$OUT/res.zip"
+
+echo "==> aapt2 link (manifest + resources -> base APK, generates R.java)"
+"$BT/aapt2.exe" link \
+  -o "$OUT/base.apk" \
+  -I "$ANDROID_JAR" \
+  --manifest AndroidManifest.xml \
+  -R "$OUT/res.zip" \
+  --java "$OUT/gen" \
+  --min-sdk-version 21 \
+  --target-sdk-version 34 \
+  --auto-add-overlay
+
+echo "==> javac"
+"$JBR/javac.exe" -source 8 -target 8 -nowarn \
+  -bootclasspath "$ANDROID_JAR" \
+  -classpath "$ANDROID_JAR" \
+  -d "$OUT/obj" \
+  $(find src "$OUT/gen" -name '*.java')
+
+echo "==> d8 (class files -> dex)"
+"$BT/d8.bat" --min-api 21 --output "$OUT" \
+  $(find "$OUT/obj" -name '*.class')
+
+echo "==> package dex into the APK"
+cp "$OUT/base.apk" "$OUT/unsigned.apk"
+( cd "$OUT" && "$JBR/jar.exe" uf unsigned.apk classes.dex )
+
+echo "==> zipalign"
+"$BT/zipalign.exe" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
+
+echo "==> sign (debug keystore, created on first run)"
+KS="$OUT/../debug.keystore"
+if [ ! -f "$KS" ]; then
+  "$JBR/keytool.exe" -genkeypair -v \
+    -keystore "$KS" -storepass android -keypass android \
+    -alias ambient -keyalg RSA -keysize 2048 -validity 10000 \
+    -dname "CN=AMBIENT, OU=instantbook, O=instantbook, L=, S=, C=CA"
+fi
+"$BT/apksigner.bat" sign \
+  --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+  --ks-key-alias ambient \
+  --out "$OUT/ambient.apk" "$OUT/aligned.apk"
+
+"$BT/apksigner.bat" verify -v "$OUT/ambient.apk" | head -5
+echo
+echo "BUILT: app/$OUT/ambient.apk"
+ls -la "$OUT/ambient.apk"

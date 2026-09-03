@@ -189,7 +189,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v18";
+const APP_VERSION="v19";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -534,6 +534,22 @@ function frameGeom(){
   root.setProperty("--gap",GAP+"px");
   return{tile,perRow,perSide,total:2*perRow+2*perSide};
 }
+/* Spread the real cards evenly around the ring instead of packing them into
+   the first slots. Packed, 10 cards in 18 slots filled the entire top row
+   and the right rail and left the whole left rail plus six of seven bottom
+   slots as fillers — so half the bezel was dead space that ◄► skipped over,
+   and the frame looked lopsided. Cards stay in clockwise order, just spaced. */
+function layoutSlots(cards,total){
+  const out=new Array(total).fill(null);
+  if(!cards.length||total<=0)return out;
+  const step=total/cards.length;
+  cards.forEach((c,i)=>{
+    let p=Math.round(i*step)%total;
+    while(out[p])p=(p+1)%total;   /* rounding collision: take the next free */
+    out[p]=c;
+  });
+  return out;
+}
 function fillerHTML(n){
   return "<div class='tile filler'><h3>·</h3>"+
     "<div class='tbody'>· · ·</div></div>";
@@ -558,10 +574,11 @@ function render(){
     const F=frameGeom();
     const cards=frameCards();
     /* every card holds a permanent slot — the highlight moves, not the tiles */
-    const slots=cards.map((c,i)=>
-      tileHTML(c,mode==="bezel"&&i===selIdx,"fr",c.id===stageId));
-    while(slots.length<F.total)slots.push(fillerHTML(slots.length));
-    slots.length=Math.max(F.total,cards.length);
+    const plan=layoutSlots(cards,F.total);
+    const slots=plan.map((c,i)=>c
+      ?tileHTML(c,mode==="bezel"&&cards.indexOf(c)===selIdx,"fr",
+        c.id===stageId)
+      :fillerHTML(i));
     let i=0;
     const top=slots.slice(i,i+=F.perRow);
     const right=slots.slice(i,i+=F.perSide);
@@ -669,6 +686,7 @@ function paintSel(){
 /* Keep DOM focus on the highlighted tile. Our keydown handler calls
    preventDefault(), so the browser skips its own spatial navigation and
    this stays the single source of truth — no double-stepping. */
+let _settingFocus=false;
 function focusTile(){
   if(mode!=="bezel")return;
   const a=document.activeElement;
@@ -676,12 +694,15 @@ function focusTile(){
   const c=frameCards()[selIdx];
   if(!c)return;
   const el=document.getElementById("fr-"+c.id);
-  if(el&&el!==a){try{el.focus({preventScroll:true})}catch(e){try{el.focus()}
-    catch(e2){}}}
+  if(el&&el!==a){
+    _settingFocus=true;   /* our own focus must not bounce back through focusin */
+    try{el.focus({preventScroll:true})}catch(e){try{el.focus()}catch(e2){}}
+    _settingFocus=false;
+  }
 }
 /* if focus arrives some other way (click, browser nav), follow it */
 document.addEventListener("focusin",e=>{
-  if(mode!=="bezel")return;
+  if(mode!=="bezel"||_settingFocus)return;
   const t=e.target;if(!t||!t.closest)return;
   const tile=t.closest("#cockpit .tile");
   if(!tile||tile.classList.contains("filler"))return;
