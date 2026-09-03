@@ -21,6 +21,22 @@ Tracked files live at the repo root: `index.html` (the entire app), `companion.h
 `sw.js`, `manifest.json`, `icon.png`, `ambient-worker.js` (Cloudflare Worker reference source — deployed
 separately, not by Pages), `SETUP.md`, and archived `ambient-v*.zip` build packages.
 
+### The Android wrapper (`app/`)
+
+`app/` is a ~29 KB WebView host that loads the *hosted* page — a shell, not a fork, so `git push` is still
+the entire deploy process and the APK rarely needs reinstalling. It exists because the device's stock
+browser cannot drive this app at all (see "The cursor problem" below).
+
+Build with `bash app/build.sh` — it drives `aapt2`/`javac`/`d8`/`zipalign`/`apksigner` directly using
+build-tools 35 and the JDK bundled with Android Studio (`Android Studio1/jbr` — the first Android Studio
+install's JBR is broken, missing `jvm.cfg` and `javac`). No gradle, no daemon, nothing to download. Build
+output goes to a temp dir outside Dropbox, because Dropbox holds handles that make `rm -rf build` fail
+with "Device or resource busy". Then `adb install -r <apk>`.
+
+`app/debug.keystore` is gitignored and generated on first build. An earlier commit leaked one into this
+public repo, so that key was rotated; if you regenerate it again, the app must be **uninstalled** before
+reinstalling (signature mismatch), which also wipes its localStorage.
+
 Untracked local-only files, ignored via `.git/info/exclude` (which is local to `.git/` and never pushed):
 `info.md` (a pasted transcript of the claude.ai session that designed v11 — historical context, not
 documentation), `extracted/` (a scratch unzip of `ambient-v11.zip`), and this `CLAUDE.md`.
@@ -41,9 +57,18 @@ was listed in `SHELL` but never uploaded to the repo, 404'd, and killed the SW c
 `90ed780`). **Any file added to `SHELL` must exist at the deployed path**, and after touching `SHELL` it's
 worth confirming the SW actually reaches `activated` rather than assuming.
 
-**2. Bump both version constants together.** `APP_VERSION` in `index.html` and `CACHE` in `sw.js`
-(currently `"v11"` / `"ambient-v11"`) must move as a pair, or the service worker keeps serving stale files
-after a deploy.
+**2. Bump both version constants together.** `APP_VERSION` in `index.html` and `CACHE` in `sw.js` must
+move as a pair on *every* change to a cached file, or the service worker keeps serving stale files after a
+deploy. The SYSTEM card renders `APP_VERSION`, which is the quickest way to confirm what a device is
+actually running.
+
+**3. Deploys do not always reach the device promptly.** GitHub Pages serves `Cache-Control: max-age=600`,
+so a service-worker update check can read a stale `sw.js`, see no byte change, and keep the old cache
+alive. `index.html` registers with `updateViaCache:"none"` plus an explicit `reg.update()` on load and
+every 10 minutes, and reloads on `controllerchange` (deferred while audio plays). That was still observed
+being slow, so **to force a version onto the device now: `adb shell pm clear <package>`** — either
+`com.tcl.browser` or `io.github.instantbook.ambient`. It wipes localStorage too, so the room code, scenes,
+bookmarks and configured Worker URL all reset.
 
 ## Target device (verified over ADB, not assumed)
 
@@ -61,12 +86,27 @@ tracking, so nothing AR-shaped is possible by design.
 - **microSD**: real path `/storage/3238-3332/` (477 GB). `/AMBIENT/` exists there with `music/ movies/
   photos/ podcasts/ soundscapes/ radio/ feeds/ scenes/ docs/ maps/`. Internal storage is
   `/storage/emulated/0/` (51 GB). Both are also reachable over MTP as `Internal shared storage` and `disk`.
-- **Browser**: `com.tcl.browser` (Play-updated, current) is the real one; `com.nes.browser` is a vendor
-  system stub. **No default browser is set**, so a URL VIEW intent hits the chooser dialog — relevant to
-  the LAUNCH card's behavior. WebView is **Chromium 120**, which covers every feature the app uses (CSS
+- **Browser**: `com.tcl.browser` (Play-updated, current); `com.nes.browser` is a vendor system stub that
+  ignores VIEW intents entirely. WebView is **Chromium 120**, which covers every feature the app uses (CSS
   grid, `clamp()`, custom properties, WebAudio `AnalyserNode`, `speechSynthesis`, service workers,
   `AbortSignal.timeout`) — no polyfills needed.
 - **Sideloading**: `adb install foo.apk` works directly and bypasses the "unknown sources" toggle.
+- **Verified working on hardware**: clock, weather, markets, launch, scenes, system, and **radio audio**
+  (Groove Salad plays, and the visualizer reports `live` — real FFT on a CORS-clean stream). `headlines`
+  and `claude` are blocked only on the Cloudflare Worker not being deployed.
+
+### The cursor problem (why `app/` exists)
+
+**`com.tcl.browser` drives pages with a virtual mouse cursor and never forwards arrow keys to the page.**
+Every key-driven control in AMBIENT was therefore unreachable in it. Its package exposes only
+`BrowsePageActivity`, `HomePageActivity` and player activities — there is no settings activity, so the
+cursor cannot be turned off. Adding `tabindex="0"` to every tile did *not* flip it into spatial-navigation
+mode either. Do not spend time re-testing this; the wrapper app is the answer, and in it a WebView
+delivers `DPAD_*` to the page as ordinary Arrow/Enter events, which is what the shell already listens for.
+
+Pointer support in the app (hover highlights, click opens, `onPick(ctx,i)` on card rows) is retained as a
+fallback for any pointer-driven host. Clicks with `detail===0` are ignored — those are synthesized by a
+browser from a keypress on a focused element, and `route()` has already handled that key.
 
 ### The display trap
 
@@ -98,13 +138,32 @@ Registered cards: `cardClock` (pinned), `cardWeather`, `cardMarkets`, `cardHeadl
 
 ### Shell / layout
 
-One dominant center "stage" card surrounded by a bezel of `FRAME_SLOTS = 20` tiles — pinned cards anchor
-the frame, then the rotating ring of active cards fills clockwise, then dashed fillers pad the remainder.
-Two modes: `"stage"` (◄► rotates the staged card, ▲▼/OK go to its `onKey`, BACK zooms out) and
-`"overview"` (grid of all cards; OK zooms one in, including re-activating a scene-deactivated card).
+One dominant centre "main window" surrounded by a bezel of fixed tiles. **The bezel is a launcher, not a
+carousel** — every card holds a permanent slot and the highlight moves, so the frame can be learned
+spatially. State is two independent values: `stageId` (what the main window shows) and `selIdx` (where the
+highlight is), so the highlight can roam without disturbing what's loaded.
+
+Four modes:
+
+| mode | keys |
+|---|---|
+| `bezel` (default) | ◄► walk tiles ccw/cw · OK opens · **OK again on the loaded tile → fullscreen** · BACK overview |
+| `stage` | ▲▼/OK act inside the card · ◄► return to the bezel · BACK bezel |
+| `full` | ▲▼/OK act inside the card · ◄► browse card-to-card in place · BACK bezel |
+| `overview` | arrows select · OK opens · BACK bezel |
+
+`frameGeom()` derives tile size and per-edge slot counts from the viewport (see "The display trap"), and
+`layoutSlots()` spaces cards evenly around the ring rather than packing them into the first slots —
+packed, 10 cards in 18 slots filled the top row and right rail and left the entire left rail and most of
+the bottom as fillers, which the highlight skips, so half the bezel was unreachable. `frameCards()` is the
+single source of slot order, used for both layout and ◄► traversal, so screen position and key order
+cannot drift apart.
+
 All cards refresh on a shared 5s scheduler (`refreshCard`, gated per-card by `refresh` seconds plus
-jitter) regardless of which is staged. Physical keydown and phone-companion messages both funnel through
-the single `route(k)` function.
+jitter) regardless of which is staged. Note `refreshCard` stamps `card._last` *before* awaiting, so a
+failed fetch still consumes the slot — with `weather.refresh = 900` a transient boot-time failure looks
+identical to a permanent one for 15 minutes. Physical keydown, pointer events, and phone-companion
+messages all funnel through the same `route(k)` / `openCard()` pair.
 
 ### Data layer
 

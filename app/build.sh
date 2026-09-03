@@ -17,7 +17,11 @@ ANDROID_JAR="$SDK/platforms/android-35/android.jar"
 export JAVA_HOME='C:\Program Files\Android\Android Studio1\jbr'
 
 cd "$(dirname "$0")"
-OUT=build
+APPDIR="$PWD"
+# Build outside Dropbox: syncing thousands of intermediate class files churns
+# the client, and it keeps a handle open that makes `rm -rf build` fail with
+# "Device or resource busy". The keystore stays here (gitignored).
+OUT="${TMPDIR:-/tmp}/ambient-apk-build"
 rm -rf "$OUT"; mkdir -p "$OUT/gen" "$OUT/obj" "$OUT/res"
 
 echo "==> aapt2 compile (resources)"
@@ -53,7 +57,7 @@ echo "==> zipalign"
 "$BT/zipalign.exe" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
 echo "==> sign (debug keystore, created on first run)"
-KS="$OUT/../debug.keystore"
+KS="$APPDIR/debug.keystore"
 if [ ! -f "$KS" ]; then
   "$JBR/keytool.exe" -genkeypair -v \
     -keystore "$KS" -storepass android -keypass android \
@@ -67,5 +71,5 @@ fi
 
 "$BT/apksigner.bat" verify -v "$OUT/ambient.apk" | head -5
 echo
-echo "BUILT: app/$OUT/ambient.apk"
+echo "BUILT: $OUT/ambient.apk"
 ls -la "$OUT/ambient.apk"
