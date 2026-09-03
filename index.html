@@ -34,11 +34,15 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 #net.off{color:var(--warn)}
 /* ---------- cockpit ---------- */
 /* full instrument bezel: squares on all four sides of the stage */
-:root{--tile:clamp(118px,15.2vh,176px)}
-/* 100-inch bezel: 6 across top (corner+4+corner), 4 down each side,
-   6 across bottom. Widescreen rows spread edge-to-edge; the stage
-   takes whatever remains in the middle. */
-#cockpit{flex:1;display:grid;gap:14px;min-height:0;
+/* --tile / --gap are DERIVED AT RUNTIME by frameGeom() from the real
+   viewport — this fallback only covers the first paint. The v9 bezel
+   hardcoded 6/4/6/4 squares at clamp(118px,15.2vh,176px), which assumed
+   a ~1080-tall CSS viewport. The Pocket TV reports 960x540 (1920x1080 at
+   density 320), where 4 side tiles need 514px of a 252px rail and half of
+   them silently clip under overflow:hidden. Slot counts are now computed
+   to fit whatever viewport we actually get. */
+:root{--tile:104px;--gap:14px}
+#cockpit{flex:1;display:grid;gap:var(--gap);min-height:0;
   grid-template-areas:"t t t" "l s r" "b b b";
   grid-template-rows:var(--tile) 1fr var(--tile);
   grid-template-columns:var(--tile) 1fr var(--tile)}
@@ -169,7 +173,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v11";
+const APP_VERSION="v12";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -444,8 +448,31 @@ function compactOf(card){
     return "<span class='lbl'>—</span>";
   }catch(e){return "<span class='lbl'>—</span>"}
 }
-const FRAME_SLOTS=20; /* squares around the stage: 7 top, 3 right,
-                         7 bottom, 3 left — clockwise carousel */
+/* ---------- frame geometry ----------
+   The bezel used to be hardcoded at 20 squares (6/4/6/4) sized by a CSS
+   clamp tuned for a ~1080-tall viewport. On the Pocket TV the CSS viewport
+   is 960x540 (1920x1080 at density 320), so a 4-tile side rail needed
+   514px inside a 252px row and quietly clipped half its tiles.
+   Now tile size and per-edge slot counts are both derived from the real
+   viewport, so the ring always fits exactly and nothing is cut off.
+   Everything downstream reads these numbers rather than assuming 20. */
+const GAP=14,PAD=12;
+function frameGeom(){
+  const vw=innerWidth,vh=innerHeight;
+  /* tile ~19% of height keeps compact tiles legible on a worn display
+     while leaving the stage dominant; clamped for very small/large screens */
+  const tile=Math.round(Math.max(84,Math.min(176,vh*0.19)));
+  /* a side rail only gets the stage row: total height minus both
+     horizontal rails, the page padding and the two grid gaps */
+  const railH=vh-2*PAD-2*tile-2*GAP;
+  const fit=(span,t)=>Math.max(1,Math.floor((span+GAP)/(t+GAP)));
+  const perSide=fit(railH,tile);
+  const perRow=Math.max(3,fit(vw-2*PAD,tile));
+  const root=document.documentElement.style;
+  root.setProperty("--tile",tile+"px");
+  root.setProperty("--gap",GAP+"px");
+  return{tile,perRow,perSide,total:2*perRow+2*perSide};
+}
 function fillerHTML(n){
   return "<div class='tile filler'><h3>·</h3>"+
     "<div class='tbody'>· · ·</div></div>";
@@ -464,17 +491,19 @@ function render(){
   }else{
     cp.classList.remove("overview");
     /* frame: pinned cards anchor from the top-left corner, then the
-       ring clockwise, then fillers. 6 top / 4 right / 6 bottom / 4 left. */
+       ring clockwise, then fillers — sized to whatever the viewport fits. */
+    const F=frameGeom();
     const slots=pinnedCards().map(c=>tileHTML(c,false,"fr"));
     const rc=ringCards();
     for(let k=1;k<rc.length;k++)slots.push(tileHTML(ring(centerIdx+k),
       false,"fr"));
-    while(slots.length<FRAME_SLOTS)slots.push(fillerHTML(slots.length));
-    slots.length=FRAME_SLOTS;
-    const top=slots.slice(0,6);
-    const right=slots.slice(6,10);
-    const bottom=slots.slice(10,16).reverse();
-    const left=slots.slice(16,20).reverse();
+    while(slots.length<F.total)slots.push(fillerHTML(slots.length));
+    slots.length=F.total;
+    let i=0;
+    const top=slots.slice(i,i+=F.perRow);
+    const right=slots.slice(i,i+=F.perSide);
+    const bottom=slots.slice(i,i+=F.perRow).reverse();
+    const left=slots.slice(i,i+=F.perSide).reverse();
     document.getElementById("rail-top").innerHTML=top.join("");
     document.getElementById("rail-right").innerHTML=right.join("");
     document.getElementById("rail-bottom").innerHTML=bottom.join("");
@@ -532,6 +561,12 @@ function setOnline(v){
 addEventListener("online",()=>setOnline(true));
 addEventListener("offline",()=>setOnline(false));
 
+/* the bezel is derived from the viewport, so re-lay it out whenever that
+   changes — TV browsers resize when their chrome shows/hides */
+let _rz=null;
+addEventListener("resize",()=>{clearTimeout(_rz);
+  _rz=setTimeout(()=>render(),120)});
+
 /* ---------------- input router ----------------
    stage: ◄► rotate stage · ▲▼/OK inside card · BACK overview
    overview: arrows select · OK zoom in · BACK cancel        */
@@ -549,7 +584,11 @@ addEventListener("keydown",e=>{
 });
 function route(k){
   if(mode==="overview"){
-    const cols=3,n=visibleCards().length;
+    /* columns must match what the grid actually rendered (auto-fill at
+       150px + gap), or ▲▼ jump by the wrong stride */
+    const n=visibleCards().length;
+    const cols=Math.max(1,Math.min(n,
+      Math.floor((innerWidth-2*PAD+GAP)/(150+GAP))));
     if(k==="left"&&ovSel>0)ovSel--;
     else if(k==="right"&&ovSel<n-1)ovSel++;
     else if(k==="up"&&ovSel-cols>=0)ovSel-=cols;
