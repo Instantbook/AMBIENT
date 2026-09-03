@@ -8,9 +8,13 @@
      ANTHROPIC_API_KEY   — your Anthropic key (never in the client)
    Vars (wrangler.toml [vars]):
      FEEDS  — comma-separated RSS URLs
-     MODEL  — optional, default "claude-sonnet-4-6"
+     MODEL  — optional, default "claude-opus-5"
      ALLOW_ORIGIN — your Pages origin, e.g.
                     "https://instantbook.github.io"
+
+   Only /ws needs the ROOMS Durable Object. Deploy without it and
+   /feeds and /claude still work — headlines and the CLAUDE card come
+   up, only the phone companion stays dark.
    ============================================================ */
 
 const CORS = env => ({
@@ -56,8 +60,14 @@ export default {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: env.MODEL || "claude-sonnet-4-6",
+          model: env.MODEL || "claude-opus-5",
+          // Deliberately small: the reply is spoken aloud and read on a HUD,
+          // so a long answer is a worse answer here, not a truncated one.
           max_tokens: 600,
+          // Thinking is on by default on Opus 5. Low effort keeps the glasses
+          // responsive for short conversational turns; raise it if you start
+          // asking the card real questions.
+          output_config: { effort: "low" },
           system: "You are Claude on a wearable glasses display. " +
             "Replies are read on a HUD and spoken aloud: be concise, " +
             "plain prose, no markdown, no lists.",
@@ -135,23 +145,5 @@ export class Room {
   webSocketClose(ws) { try { ws.close(); } catch (e) {} }
 }
 
-/* ---- wrangler.toml ----------------------------------------
-name = "ambient-worker"
-main = "ambient-worker.js"
-compatibility_date = "2026-08-01"
+/* Deployment config now lives in wrangler.toml at the repo root. */
 
-[vars]
-FEEDS = "https://feeds.bbci.co.uk/news/world/rss.xml,https://www.ekathimerini.com/feed/"
-MODEL = "claude-sonnet-4-6"
-ALLOW_ORIGIN = "https://instantbook.github.io"
-
-[[durable_objects.bindings]]
-name = "ROOMS"
-class_name = "Room"
-
-[[migrations]]
-tag = "v1"
-new_classes = ["Room"]
-
-# then: wrangler secret put ANTHROPIC_API_KEY
-------------------------------------------------------------- */
