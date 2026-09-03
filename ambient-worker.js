@@ -17,6 +17,11 @@
    up, only the phone companion stays dark.
    ============================================================ */
 
+// Several publishers reject requests without one, and a 403 body is HTML
+// that then regex-parses to zero rows — a silent empty result.
+const UA = "Mozilla/5.0 (compatible; AMBIENT/1.0; " +
+  "+https://instantbook.github.io/AMBIENT/)";
+
 const CORS = env => ({
   "Access-Control-Allow-Origin": env.ALLOW_ORIGIN || "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
@@ -80,6 +85,55 @@ export default {
       const reply = (d.content || [])
         .filter(b => b.type === "text").map(b => b.text).join("\n");
       return json({ reply }, 200, env);
+    }
+
+    /* ---- radio: curated Greek stations from greek-radio.gr ----
+       Replaces radio-browser.info, whose votes-ranked list was 7/8 plain
+       http and therefore blocked as mixed content on an https page. Every
+       stream here is https AND sends CORS headers, so these also drive the
+       real FFT visualiser instead of the synthetic fallback.
+       ?path= browses the site's own taxonomy: genre/ambient, crete/chania,
+       central-macedonia/thessaloniki. Default is the curated front page. */
+    if (url.pathname === "/radio") {
+      const raw = url.searchParams.get("path") || "";
+      // no scheme, no host, no traversal - this only ever walks that site
+      const path = /^[a-z0-9][a-z0-9/-]{0,60}$/.test(raw) && !raw.includes("..")
+        ? raw : "";
+      const src = "https://greek-radio.gr/" + path;
+      try {
+        const r = await fetch(src, {
+          cf: { cacheTtl: 900 },
+          headers: { "User-Agent": UA, "Accept": "text/html" },
+        });
+        if (!r.ok) return json({ error: "upstream " + r.status }, 502, env);
+        const html = await r.text();
+        const out = [], seen = new Set();
+        const tagRx = /<[^>]+data-stream-url="[^"]*"[^>]*>/g;
+        let m;
+        while ((m = tagRx.exec(html))) {
+          const tag = m[0];
+          const at = n => {
+            const g = new RegExp('data-' + n + '="([^"]*)"').exec(tag);
+            return g ? decode(g[1]) : "";
+          };
+          const stream = at("stream-url");
+          if (!stream || seen.has(stream)) continue;
+          seen.add(stream);
+          // "Αθήνα · 102.2 FM" -> city is the grouping key the card sorts on
+          const meta = at("meta");
+          out.push({
+            label: at("title") || "STATION",
+            url: stream,
+            city: (meta.split("·")[0] || "").trim(),
+            meta,
+            logo: at("logo"),
+            link: at("href"),
+          });
+        }
+        return json(out, 200, env);
+      } catch (e) {
+        return json({ error: "fetch failed" }, 502, env);
+      }
     }
 
     /* ---- feeds: fetch + crude-parse RSS titles server-side ---- */

@@ -219,7 +219,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v24";
+const APP_VERSION="v25";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1239,15 +1239,22 @@ const RADIO_PRESETS=[
 const cardRadio={
   id:"radio",title:"RADIO",icon:"radio",
   pane:"listen",size:"large",order:50,refresh:3600,offline:"local-first",
-  sources:[{key:"radio.gr",origin:"direct",path:
-    "https://de1.api.radio-browser.info/json/stations/bycountry/greece"+
-    "?limit=8&order=votes&reverse=true&hidebroken=true"}],
+  /* Was radio-browser.info, votes-ranked: 7 of its 8 top Greek stations
+     were plain http, so they were blocked as mixed content on an https
+     page and simply never played. greek-radio.gr is curated, every stream
+     is https, and they send CORS headers — so these also get the real
+     analyser rather than the synthetic fallback. Sorted by city so the
+     list groups instead of arriving in arbitrary order. */
+  sources:[{key:"radio.list",origin:"worker",path:"/radio"}],
   sel:0,
   _list(ctx,data){
-    const gr=((data&&data["radio.gr"])||ctx.cachedOnly("radio.gr")||[])
-      .filter(s=>s&&s.url_resolved)
-      .map(s=>({label:(s.name||"").trim().toUpperCase().slice(0,28),
-        url:s.url_resolved,cors:false,region:"greece"}));
+    const raw=(data&&data["radio.list"])||ctx.cachedOnly("radio.list")||[];
+    const gr=(Array.isArray(raw)?raw:[])
+      .filter(s=>s&&s.url)
+      .map(s=>({label:String(s.label||"STATION").trim().slice(0,30),
+        url:s.url,cors:true,region:(s.city||"greece").trim()}))
+      .sort((a,b)=>a.region.localeCompare(b.region,"el")||
+                   a.label.localeCompare(b.label,"el"));
     return RADIO_PRESETS.concat(gr);
   },
   render(ctx,data){
@@ -1271,8 +1278,8 @@ const cardRadio={
         st.region+"</span></div>";
     }).join("")+
     "<div class='state' style='margin-top:10px'>"+
-    (ctx.audio.failed()?"⚠ that stream would not start — http stations "+
-      "need the AMBIENT app (a browser blocks them on an https page)":
+    (ctx.audio.failed()?"⚠ that stream would not start — it may be "+
+      "temporarily down; try another":
       cur?"playing — OK on station stops/switches":
       "▲▼ choose · OK play")+"</div>";
   },
