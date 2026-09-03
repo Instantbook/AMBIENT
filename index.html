@@ -173,7 +173,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v12";
+const APP_VERSION="v13";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1311,8 +1311,14 @@ on("audio",p=>{
 render();
 CARDS.forEach(c=>refreshCard(c,true));
 
+/* updateViaCache:"none" makes the browser revalidate sw.js against the
+   network on every update check instead of reusing its HTTP-cached copy.
+   GitHub Pages serves max-age=600, so without this a fresh deploy stays
+   invisible on the device for up to 10 minutes — the update check reads
+   the stale script, sees no byte change, and keeps the old cache alive. */
 if("serviceWorker" in navigator)
-  navigator.serviceWorker.register("sw.js").catch(()=>{});
+  navigator.serviceWorker.register("sw.js",{updateViaCache:"none"})
+    .catch(()=>{});
 </script>
 </body>
 </html>
