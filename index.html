@@ -261,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v56";
+const APP_VERSION="v57";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1630,9 +1630,37 @@ const RADIO_PRESETS=[
   {label:"ΕΡΜΙΟΝΙΔΑ FM 104.3",url:"https://ermionida.radioca.st/stream",
     cors:true,region:"ermionida"}
 ];
+/* greek-radio.gr's own taxonomy, which the Worker's /radio?path= walks.
+   Hardcoded rather than scraped: it is a stable list of eighteen genres and
+   fifteen cities, and scraping it would mean a round trip before the menu
+   could even be drawn. Cities carry a display name because the slugs are
+   administrative regions nobody thinks in ("region-of-attica/athens"). */
+const RADIO_GENRES=["80s","ambient","classical","dance","electronic","folk",
+  "hits","house","instrumental","jazz","lounge","news","oldies","pop","rock",
+  "sports","talk","top-40"];
+const RADIO_CITIES=[
+  ["region-of-attica/athens","Athens"],
+  ["central-macedonia/thessaloniki","Thessaloniki"],
+  ["region-of-western-greece/patras","Patras"],
+  ["thessaly/larissa","Larissa"],
+  ["thessaly/volos","Volos"],
+  ["crete/heraklion","Heraklion"],
+  ["crete/chania","Chania"],
+  ["epirus/ioannina","Ioannina"],
+  ["eastern-macedonia-and-thrace/kavala","Kavala"],
+  ["eastern-macedonia-and-thrace/xanthi","Xanthi"],
+  ["eastern-macedonia-and-thrace/alexandroupoli","Alexandroupoli"],
+  ["region-of-central-greece/lamia","Lamia"],
+  ["region-of-central-greece/chalkida","Chalkida"],
+  ["region-of-the-north-aegean/mytilene","Mytilene"],
+  ["region-of-the-peloponnese/kalamata","Kalamata"]
+];
+
 const cardRadio={
   id:"radio",title:"RADIO",icon:"radio",
   pane:"listen",size:"large",order:50,refresh:3600,offline:"local-first",
+  /* home | genres | cities | stations */
+  _level:"home",_path:"",_pathLabel:"",_busy:false,_err:"",
   /* Was radio-browser.info, votes-ranked: 7 of its 8 top Greek stations
      were plain http, so they were blocked as mixed content on an https
      page and simply never played. greek-radio.gr is curated, every stream
@@ -1666,42 +1694,168 @@ const cardRadio={
        else keeps its preset-then-by-city order */
     return all.sort((a,b)=>(b.fav?1:0)-(a.fav?1:0));
   },
+
+  /* ---- browsing greek-radio.gr by genre and city ----
+     The Worker endpoint for this has existed since the radio rewrite and
+     nothing ever called it, so RADIO showed one flat curated list. Results
+     go through the same last-known-good cache as everything else, keyed by
+     path, so a genre you have opened before still opens offline. */
+  _cacheKey(p){return "radio:"+p},
+  _stations(ctx,path){
+    const c=cacheGet(this._cacheKey(path));
+    return c&&Array.isArray(c.d)?c.d:null;
+  },
+  _load(ctx,path){
+    if(this._busy)return;
+    const base=WORKER_BASE();
+    if(!base){this._err="no worker URL configured";ctx.rerender();return}
+    this._busy=true;this._err="";ctx.rerender();
+    const url=base.replace(/\/$/,"")+"/radio?path="+encodeURIComponent(path);
+    const done=()=>{this._busy=false;try{ctx.rerender()}catch(e){}};
+    fetch(url,{signal:AbortSignal.timeout?AbortSignal.timeout(12000):undefined})
+      .then(r=>r.ok?r.json():Promise.reject(new Error("HTTP "+r.status)))
+      .then(d=>{
+        if(!Array.isArray(d))throw new Error("bad response");
+        cachePut(this._cacheKey(path),d);
+        this._err=d.length?"":"no stations listed here";
+      })
+      .catch(e=>{this._err=String(e.message||e).slice(0,60)})
+      .then(done,done);
+  },
+  _browseList(ctx){
+    const raw=this._stations(ctx,this._path)||[];
+    const favs=this._favs(ctx);
+    return raw.filter(s=>s&&s.url).map(s=>({
+      label:String(s.label||"STATION").trim().slice(0,30),
+      url:s.url,cors:true,region:(s.city||"greece").trim(),
+      meta:String(s.meta||"").trim(),fav:favs.indexOf(s.url)>=0,
+    }));
+  },
+  /* Uniform rows for whichever level is showing. `station` present means
+     OK plays it; otherwise OK descends. */
+  _rows(ctx,data){
+    if(this._level==="genres")
+      return RADIO_GENRES.map(g=>({label:g.toUpperCase(),meta:"genre",
+        go:["genre/"+g,g.toUpperCase()]}));
+    if(this._level==="cities")
+      return RADIO_CITIES.map(([p,name])=>({label:name.toUpperCase(),
+        meta:"city",go:[p,name.toUpperCase()]}));
+    if(this._level==="stations"){
+      /* _fixed holds a curated list handed over whole (starred, featured);
+         otherwise the stations are whatever the path fetched */
+      const src=this._fixed||this._browseList(ctx);
+      return src.map(st=>({label:st.label,meta:st.meta||st.region,
+        station:st}));
+    }
+    /* home */
+    const favs=this._favs(ctx);
+    const featured=this._list(ctx,data);
+    const rows=[];
+    if(favs.length)
+      rows.push({label:"★ STARRED",meta:favs.length+" stations",
+        stations:featured.filter(s=>s.fav)});
+    rows.push({label:"FEATURED",meta:featured.length+" stations",
+      stations:featured});
+    rows.push({label:"BY GENRE",meta:RADIO_GENRES.length+" genres",
+      level:"genres"});
+    rows.push({label:"BY CITY",meta:RADIO_CITIES.length+" cities",
+      level:"cities"});
+    return rows;
+  },
+  _enter(ctx,data){
+    const rows=this._rows(ctx,data),r=rows[this.sel];
+    if(!r)return;
+    if(r.station){ctx.audio.toggle(r.station);render();return}
+    if(r.level){this._level=r.level;this.sel=0;ctx.rerender();return}
+    if(r.go){
+      this._path=r.go[0];this._pathLabel=r.go[1];
+      this._level="stations";this.sel=0;
+      if(!this._stations(ctx,this._path))this._load(ctx,this._path);
+      else ctx.rerender();
+      return;
+    }
+    if(r.stations){
+      /* the curated lists are already in hand - no path, no fetch */
+      this._path="";this._pathLabel=r.label;
+      this._level="stations";this.sel=0;this._fixed=r.stations;
+      ctx.rerender();
+    }
+  },
+  _up(ctx){
+    if(this._level==="stations"){
+      this._fixed=null;
+      this._level=this._path.indexOf("genre/")===0?"genres"
+        :this._path?"cities":"home";
+      this.sel=0;ctx.rerender();return true;
+    }
+    if(this._level==="genres"||this._level==="cities"){
+      this._level="home";this.sel=0;ctx.rerender();return true;
+    }
+    return false;                       /* at the top: the shell takes it */
+  },
+  onBack(ctx){return this._up(ctx)},
   render(ctx,data){
-    const list=this._list(ctx,data);
+    const rows=this._rows(ctx,data);
     const cur=ctx.audio.current();
-    return list.map((st,i)=>{
-      const now=cur&&cur.url===st.url;
-      const bad=ctx.audio.failed()===st.url;
-      const rc=srcColor(st.region);
-      /* http streams cannot play on an https page unless the host allows
-         mixed content (our WebView wrapper does; a plain browser will not) */
-      const insecure=/^http:\/\//i.test(st.url);
+    const where=this._level==="home"?null
+      :{head:this._level==="genres"?"BY GENRE"
+         :this._level==="cities"?"BY CITY":esc(this._pathLabel||"STATIONS"),
+        sub:this._level==="stations"
+          ?(this._busy?"loading…":rows.length+" stations")
+          :rows.length+" to choose from"};
+    const head=where?"<div style='margin-bottom:12px'>"+
+      "<div style='color:var(--accent);font-size:15px'>"+where.head+"</div>"+
+      "<div class='lbl'>"+where.sub+"</div></div>":"";
+    if(this._level==="stations"&&!rows.length)
+      return head+"<div class='state'>"+
+        (this._busy?"asking the relay…"
+          :esc(this._err||"nothing here")+
+           "<br><br>BACK to go up · OK to retry")+"</div>";
+    return head+rows.map((r,i)=>{
+      const st=r.station;
+      const now=st&&cur&&cur.url===st.url;
+      const bad=st&&ctx.audio.failed()===st.url;
+      const rc=st?srcColor(st.region):"var(--dim)";
       return "<div class='row"+(i===this.sel?" hl sel":"")+
         "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+
         (now?"<span style='color:var(--up)'>▶ </span>":"")+
         (bad?"<span style='color:var(--down)'>⚠ </span>":"")+
-        (st.fav?"<span style='color:var(--warn)'>★ </span>":"")+
-        esc(st.label)+"</span>"+
+        (st&&st.fav?"<span style='color:var(--warn)'>★ </span>":"")+
+        esc(r.label)+(r.level||r.go||r.stations?" ›":"")+"</span>"+
         "<span style='color:"+rc+";font-size:12px'>"+
-        (insecure?"<span class='lbl' style='margin-right:8px'>http</span>":"")+
-        esc(st.meta||st.region)+"</span></div>";
+        esc(r.meta||"")+"</span></div>";
     }).join("")+
     "<div class='state' style='margin-top:10px'>"+
-    (ctx.audio.failed()?"⚠ that stream would not start — it may be "+
-      "temporarily down; try another":
-      cur?"▲▼ choose · OK stops/switches · ► star "+
-        "· double-OK the tile stops from anywhere":
-      "▲▼ choose · OK play · ► star · "+
-        "BACK to tiles")+"</div>";
+    (ctx.audio.failed()&&this._level==="stations"
+      ?"⚠ that stream would not start — it may be temporarily down; "+
+       "try another<br>":"")+
+    "▲▼ choose · OK "+
+    (this._level==="stations"?"play/stop":"open")+
+    (this._level==="stations"?" · ► star":"")+
+    " · ◄► back to tiles · BACK "+
+    (this._level==="home"?"to tiles":"up a level")+"</div>";
+  },
+  /* One audio bus serves RADIO and MUSIC, so "something is playing" is not
+     "MY station is playing" - without this the radio tile announced whatever
+     track MUSIC had started, play marker and all.
+     Matching against the featured list is no longer enough now that stations
+     can come from any genre or city, and that list is not even loaded for
+     them. A local track is the one thing this bus plays that is NOT radio,
+     and it always comes from the app's own media URL - so ownership is
+     "playing, and not a local file". */
+  _owns(ctx){
+    const cur=ctx.audio.current();
+    if(!cur)return false;
+    let base="";try{base=hostBridge&&hostBridge.mediaBase?
+      hostBridge.mediaBase():""}catch(e){}
+    if(base&&String(cur.url).indexOf(base)===0)return false;
+    return true;
   },
   renderCompact(ctx){
     const cur=ctx.audio.current();
     const list=this._list(ctx,this._data);
-    /* One audio bus serves RADIO and MUSIC, so "something is playing" is not
-       "MY station is playing" - without this the radio tile announced
-       whatever track MUSIC had started, play marker and all. */
-    if(cur&&list.some(st=>st.url===cur.url))
+    if(cur&&this._owns(ctx))
       return face("▶",esc(cur.label),
         {color:"var(--up)",sub:esc(cur.region||"")});
     const regions=[];
@@ -1711,36 +1865,44 @@ const cardRadio={
       {dots:regions.map(srcColor),sub:nf?nf+" ★ starred":""});
   },
   onKey(ctx,k){
-    const list=this._list(ctx,this._data);
-    if(k==="down"&&this.sel<list.length-1){this.sel++;ctx.rerender();
+    const rows=this._rows(ctx,this._data);
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();
       return true}
     if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
-    if(k==="enter"&&list[this.sel]){
-      ctx.audio.toggle(list[this.sel]);
-      render(); /* now-playing shows on radio + visualizer tiles */
-      return true;
+    if(k==="enter"){
+      /* an empty station list means the fetch failed - OK retries it */
+      if(this._level==="stations"&&!rows.length&&this._path){
+        this._load(ctx,this._path);return true;
+      }
+      this._enter(ctx,this._data);return true;
     }
-    /* ► stars the highlighted station. Consuming the key means it does not
-       also jump tiles; ◄ is still the way out, so the card keeps an exit. */
-    if(k==="right"&&list[this.sel]){
-      this._toggleFav(ctx,list[this.sel].url);
+    /* ► stars the highlighted station. Only meaningful on a station row;
+       elsewhere it falls through and keeps the shell's meaning, so the
+       card never eats the key that gets you out. */
+    if(k==="right"&&rows[this.sel]&&rows[this.sel].station){
+      this._toggleFav(ctx,rows[this.sel].station.url);
       render();
       return true;
     }
     return false;
   },
   onPick(ctx,i){
-    const list=this._list(ctx,this._data);
-    if(!list[i])return;
-    this.sel=i;ctx.audio.toggle(list[i]);render();
+    const rows=this._rows(ctx,this._data);
+    if(!rows[i])return;
+    this.sel=i;this._enter(ctx,this._data);
   },
   /* double-press the tile: start or stop the station the card is sitting
      on, without opening the card at all. audio.toggle() already stops when
      handed the stream that is playing, so this is one call. */
   onToggle(ctx){
-    const st=this._list(ctx,this._data)[this.sel];
-    if(!st)return;
-    ctx.audio.toggle(st);
+    const cur=ctx.audio.current();
+    /* If this card is what is playing, stop it - that is the gesture people
+       reach for. Otherwise start whatever is highlighted, but only when the
+       highlight is actually on a station; on a menu row there is nothing to
+       play and doing nothing is the honest response. */
+    if(cur&&this._owns(ctx)){ctx.audio.stop();return}
+    const r=this._rows(ctx,this._data)[this.sel];
+    if(r&&r.station)ctx.audio.toggle(r.station);
   }
 };
 

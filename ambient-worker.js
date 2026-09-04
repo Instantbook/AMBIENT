@@ -88,6 +88,12 @@ export default {
           };
           const stream = at("stream-url");
           if (!stream || seen.has(stream)) continue;
+          // Plain http is blocked as mixed content on an https page, so the
+          // station would appear, be selectable, and silently never play.
+          // Two or three per listing are like this. Dropping them here is
+          // the difference between a short list that works and a longer one
+          // that lies.
+          if (!/^https:/i.test(stream)) continue;
           seen.add(stream);
           // "Αθήνα · 102.2 FM" -> city is the grouping key the card sorts on
           const meta = at("meta");
