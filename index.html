@@ -55,12 +55,21 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .rail-v{flex-direction:column}
 #stage-wrap{min-height:0;display:flex}
 /* stage card */
+/* The stage no longer scrolls as a whole. It used to, which took the header
+   with it - and, once a card grew a footer, took that too: MUSIC's scrub bar
+   sat below thirteen track rows, so the one thing you need while seeking was
+   the one thing off screen. Header and footer are pinned; only the body
+   between them moves. */
 #stage{position:relative;flex:1;border:1px solid var(--accent);
-  border-radius:3px;padding:18px 22px 16px;overflow-y:auto;
-  scrollbar-width:none;
+  border-radius:3px;padding:18px 22px 16px;overflow:hidden;
+  display:flex;flex-direction:column;
   box-shadow:0 0 0 1px var(--accent),0 0 26px -8px var(--accent)}
-#stage::-webkit-scrollbar{display:none}
-#stage h2{font-family:var(--mono);font-size:11px;font-weight:500;
+#stage-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none}
+#stage-body::-webkit-scrollbar{display:none}
+#stage-foot:empty{display:none}
+#stage-foot{flex:none;padding-top:12px;margin-top:4px;
+  border-top:1px solid var(--faint)}
+#stage h2{flex:none;font-family:var(--mono);font-size:11px;font-weight:500;
   letter-spacing:.2em;color:var(--accent);margin-bottom:14px;
   display:flex;justify-content:space-between;gap:12px}
 #stage-status{display:flex;gap:14px;color:var(--dim);
@@ -143,6 +152,7 @@ body.bare #cockpit{gap:0}
 body.bare #stage{border:none;box-shadow:none;border-radius:0;padding:0}
 body.bare #stage::before,body.bare #stage::after{display:none}
 body.bare #stage h2{display:none}
+body.bare #stage-foot{display:none}
 body.bare #vis-foot{display:none}
 /* fullscreen: collapse the grid to the stage; rails stay in the DOM so
    renderCard() can keep refreshing their tiles behind the scenes */
@@ -217,6 +227,7 @@ input[type=text]:focus{border-color:var(--accent)}
         <span id="st-link"></span><span id="st-audio"></span>
         <span id="net"></span><span id="st-full"></span></span></h2>
       <div class="body" id="stage-body"></div>
+      <div id="stage-foot"></div>
     </section></div>
     <div class="rail rail-v" id="rail-right"></div>
     <div class="rail rail-h" id="rail-bottom"></div>
@@ -233,7 +244,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v50";
+const APP_VERSION="v51";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -876,6 +887,16 @@ function renderCard(card){
       else if(out instanceof Node){host.innerHTML="";host.appendChild(out)}
     }catch(e){host.innerHTML="<div class='state'>render error</div>";
       console.warn("render fail",card.id,e)}
+    /* Optional pinned footer, below the scroll rather than inside it. A
+       transport bar is useless if it can scroll out of sight. */
+    const foot=document.getElementById("stage-foot");
+    if(foot){
+      let f="";
+      if(card.renderFooter){
+        try{f=card.renderFooter(ctxFor(card))||""}catch(e){f=""}
+      }
+      foot.innerHTML=f;
+    }
     /* Cards re-render their whole list on every ▲▼, so the highlighted row
        has to be scrolled back into view or it walks off the bottom of the
        stage and you lose track of the selection entirely. "nearest" keeps
@@ -2079,15 +2100,17 @@ const cardMusic={
           "<span class='lbl' style='font-size:12px'>"+esc(r.meta)+
           "</span></div>";
       }).join("")+
-      this._timeline(ctx)+
       "<div class='state' style='margin-top:10px'>\u25b2\u25bc choose \u00b7 OK "+
       (this._level==="tracks"?"play/pause":"open")+
       " \u00b7 \u25c4\u25ba seek (hold to scrub) \u00b7 BACK "+
       (this._level==="artists"?"to tiles":"up a level")+"</div>";
   },
-  /* Elapsed / remaining with a scrub bar, shown only while this card owns
-     what is playing. A stream has no duration and gets no fake timeline. */
-  _timeline(ctx){
+  /* Elapsed / remaining with a scrub bar, pinned under the scrolling list
+     rather than appended to it - thirteen track rows put it off screen,
+     which is no use at all while you are seeking. Shown only while this
+     card owns what is playing; a stream has no duration and gets no fake
+     timeline. */
+  renderFooter(ctx){
     if(!this._owns(ctx))return "";
     const cur=ctx.audio.current();
     const d=ctx.audio.duration();
