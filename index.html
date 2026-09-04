@@ -244,7 +244,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v51";
+const APP_VERSION="v52";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1856,7 +1856,7 @@ const cardVis={
      leaving the visualiser to do it. Nothing to scrub on a live stream, so
      they fall through to the shell as usual. */
   onKey(ctx,k,held){
-    if((k==="left"||k==="right")&&ctx.audio.seekable()){
+    if((k==="left"||k==="right")&&mode==="full"&&ctx.audio.seekable()){
       ctx.audio.seek((k==="left"?-1:1)*(held?3:10));
       return true;
     }
@@ -2050,7 +2050,29 @@ const cardMusic={
     if(this._level==="albums"){
       this._album=r.label;this._level="tracks";this.sel=0;ctx.rerender();return;
     }
-    ctx.audio.toggle(this._item(r.track));render();
+    /* A single OK starts or resumes, and never pauses. Pausing was far too
+       easy to do by accident while walking the list, and the only way to
+       undo it was another press that reads as "stop". Pausing is a
+       deliberate double-press: on this row, or on the tile from outside. */
+    const it=this._item(r.track),cur=ctx.audio.current();
+    const now=Date.now();
+    const again=(now-(this._lastOk||0)<320)&&this._lastRow===this.sel;
+    this._lastOk=now;this._lastRow=this.sel;
+    if(cur&&cur.url===it.url){
+      if(again)ctx.audio.paused()?ctx.audio.resume():ctx.audio.pause();
+      else if(ctx.audio.paused())ctx.audio.resume();
+      render();return;
+    }
+    ctx.audio.play(it);render();
+  },
+  /* Whether BACK will climb or leave - the hint has to say which, and
+       guessing wrong is how a card starts feeling like a trap. */
+  _canClimb(){
+    const solo=this._artists().length===1;
+    if(this._level==="tracks")
+      return this._albums(this._artist).length===1?!solo:true;
+    if(this._level==="albums")return !solo;
+    return false;
   },
   /* Climb, skipping on the way up exactly the levels that were skipped on
      the way down, and returning false at the top so the shell can leave. */
@@ -2101,9 +2123,10 @@ const cardMusic={
           "</span></div>";
       }).join("")+
       "<div class='state' style='margin-top:10px'>\u25b2\u25bc choose \u00b7 OK "+
-      (this._level==="tracks"?"play/pause":"open")+
-      " \u00b7 \u25c4\u25ba seek (hold to scrub) \u00b7 BACK "+
-      (this._level==="artists"?"to tiles":"up a level")+"</div>";
+      (this._level==="tracks"?"play \u00b7 OK twice pauses":"open")+
+      " \u00b7 \u25c4\u25ba back to tiles \u00b7 BACK "+
+      (this._canClimb()?"up a level":"to tiles")+
+      (this._owns(ctx)?" \u00b7 fullscreen: \u25c4\u25ba seek":"")+"</div>";
   },
   /* Elapsed / remaining with a scrub bar, pinned under the scrolling list
      rather than appended to it - thirteen track rows put it off screen,
@@ -2148,10 +2171,14 @@ const cardMusic={
     if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();return true}
     if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
     if(k==="enter"){this._enter(ctx);return true}
-    /* ◄► scrub, but only while this card is the one playing - otherwise they
-       keep the shell's meaning and take you back to the tiles. ∓10s a press,
-       ∓3s per auto-repeat so a hold runs smoothly instead of in 10s jumps. */
-    if((k==="left"||k==="right")&&this._owns(ctx)&&ctx.audio.seekable()){
+    /* Scrubbing is FULLSCREEN ONLY. In the windowed list ◄► have to keep
+       meaning "leave this card": taking them for transport turned the card
+       into a trap, because the way out people actually reach for silently
+       became a fast-forward. Fullscreen has no tiles to walk back to and
+       BACK is right there, so the keys are free. ∓10s a press, ∓3s per
+       auto-repeat, so a hold runs smoothly instead of in 10s lurches. */
+    if((k==="left"||k==="right")&&mode==="full"
+       &&this._owns(ctx)&&ctx.audio.seekable()){
       ctx.audio.seek((k==="left"?-1:1)*(held?3:10));
       ctx.rerender();return true;
     }
@@ -2296,8 +2323,9 @@ const cardSystem={
       "<div class='state' style='margin-top:10px'>"+
       "tiles: ◄►▲▼ move · OK open · OK again "+
       "fullscreen · double-OK plays a RADIO/MUSIC tile in place<br>"+
-      "in a card: ▲▼ choose · OK act · ◄► seek "+
-      "when there is a timeline (hold to scrub) · BACK up a level</div>";
+      "in a card: ▲▼ choose · OK act · ◄► back to tiles · "+
+      "BACK up a level<br>"+
+      "fullscreen: ◄► seek when there is a timeline (hold to scrub)</div>";
   },
   renderCompact(ctx){
     return face(ctx.theme(),APP_VERSION+" · "+CARDS.length+" cards");
