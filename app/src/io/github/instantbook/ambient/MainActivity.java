@@ -51,19 +51,24 @@ public class MainActivity extends Activity {
      * this process's CPU time, plus the Worker URL so a wiped localStorage
      * does not mean retyping it on a TV keyboard.
      *
-     * Deliberately NOT attached while an external site is loaded - the
-     * LAUNCH card navigates anywhere, and a JavascriptInterface is exposed
-     * to whatever page happens to be open. See shouldOverrideUrlLoading /
-     * onPageStarted below.
+     * The interface stays attached but REFUSES TO ANSWER off-site. Adding
+     * and removing it per navigation looked tidier but does not work:
+     * Android only exposes an interface from the next page load, so
+     * re-adding it in onPageStarted was too late for the load in progress
+     * and the card came back from a launched site reading "host only".
+     * A volatile flag set on the UI thread is both correct and thread-safe,
+     * since these methods run on a binder thread where touching the WebView
+     * would not be.
      */
     public class Host {
         private long lastCpuMs = 0L, lastWallMs = 0L;
 
         @JavascriptInterface
-        public String worker() { return WORKER_URL; }
+        public String worker() { return atAmbient ? WORKER_URL : ""; }
 
         @JavascriptInterface
         public String stats() {
+            if (!atAmbient) return "{}";   // youtube.com does not get this
             long totalKb = 0, availKb = 0;
             try {
                 ActivityManager am = (ActivityManager)
@@ -98,14 +103,8 @@ public class MainActivity extends Activity {
     }
 
     private final Host host = new Host();
-    private boolean hostAttached = false;
-
-    private void attachHost(boolean on) {
-        if (on == hostAttached || web == null) return;
-        if (on) web.addJavascriptInterface(host, "AmbientHost");
-        else web.removeJavascriptInterface("AmbientHost");
-        hostAttached = on;
-    }
+    /** Written on the UI thread in onPageStarted, read from binder threads. */
+    private volatile boolean atAmbient = true;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -142,11 +141,11 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView v, String url, android.graphics.Bitmap f) {
-                attachHost(url != null && url.startsWith(URL));
+                atAmbient = url == null || url.startsWith(URL);
                 super.onPageStarted(v, url, f);
             }
         });
-        attachHost(true);
+        web.addJavascriptInterface(host, "AmbientHost");
 
         setContentView(web);
         web.requestFocus();
@@ -182,21 +181,52 @@ public class MainActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     }
 
+    /** True while the WebView is showing AMBIENT rather than a launched site. */
+    private boolean atHome() {
+        String u = web != null ? web.getUrl() : null;
+        return u == null || u.startsWith(URL);
+    }
+
     /**
-     * BACK is a navigation key inside AMBIENT (leave fullscreen, open the
-     * overview), but Android delivers it to the Activity rather than to the
-     * page. Forward it as an Escape keydown, which the shell's router
-     * already maps to "back". Two presses in quick succession still quit.
+     * BACK means two different things depending on where you are, and
+     * getting that wrong stranded people.
+     *
+     * On AMBIENT it is a navigation key - leave fullscreen, open the
+     * overview - but Android delivers it to the Activity, not the page, so
+     * it is forwarded as an Escape keydown. Two presses quit.
+     *
+     * On a site opened by the LAUNCH card it has to behave like a browser.
+     * Overriding onKeyDown had shadowed onBackPressed entirely, so BACK sent
+     * an Escape that Wikipedia ignored and a second press quit the app:
+     * there was no way back to the dashboard at all. Now it walks history,
+     * falls back to AMBIENT when history runs out, and a double press jumps
+     * straight home however deep you have browsed. Quitting is only possible
+     * from AMBIENT itself, so a launched site can never be a dead end.
      */
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             long now = System.currentTimeMillis();
-            if (now - lastBackAt < EXIT_WINDOW_MS) {
+            boolean quick = now - lastBackAt < EXIT_WINDOW_MS;
+            lastBackAt = now;
+
+            if (!atHome()) {
+                if (quick) {                 // impatient: go straight home
+                    web.loadUrl(URL);
+                } else if (web.canGoBack()) {
+                    web.goBack();
+                    Toast.makeText(this, "Press BACK again for AMBIENT",
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    web.loadUrl(URL);
+                }
+                return true;
+            }
+
+            if (quick) {
                 finish();
                 return true;
             }
-            lastBackAt = now;
             web.evaluateJavascript(
                     "window.dispatchEvent(new KeyboardEvent('keydown',"
                             + "{key:'Escape',bubbles:true}));", null);
