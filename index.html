@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v35";
+const APP_VERSION="v36";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -336,11 +336,20 @@ const audioBus=(()=>{
              wider slice, which is what makes a spectrum look "right".
              Peak (not mean) across the slice keeps it lively. */
           const n=arr.length,len=raw.length;
+          /* Stop short of the top of the FFT. Streamed audio is lowpassed
+             by its own codec - an AAC/MP3 feed has essentially nothing
+             above ~16kHz - so the last fifth of the bins are permanently
+             near zero. Mapping bars onto them produced a dead tail, and
+             because the local baseline then collapsed there, the bands
+             just before it read as a huge spike: the hook on the right
+             end of the trace. Confine the mapping to the part of the
+             spectrum that actually carries signal. */
+          const top=Math.max(8,Math.floor(len*0.78));
           let sum=0;
           for(let i=0;i<n;i++){
-            const lo=Math.floor(Math.pow(len,i/n));
-            const hi=Math.min(len,Math.max(lo+1,
-              Math.floor(Math.pow(len,(i+1)/n))));
+            const lo=Math.floor(Math.pow(top,i/n));
+            const hi=Math.min(top,Math.max(lo+1,
+              Math.floor(Math.pow(top,(i+1)/n))));
             let mx=0;
             for(let j=lo;j<hi;j++)if(raw[j]>mx)mx=raw[j];
             /* Broadcast audio is heavily bass-weighted, so a flat map pegs
