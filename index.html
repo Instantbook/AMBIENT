@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v43";
+const APP_VERSION="v44";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1020,7 +1020,15 @@ function route(k){
 
   /* --- main window has focus (loaded or fullscreen) --- */
   if(mode==="stage"||mode==="full"){
+    /* BACK stays ahead of the card so a card can never trap you. */
     if(k==="back"){mode="bezel";render();return}
+    /* Everything else gives the card first refusal, INCLUDING ◄►. They used
+       to be handled up here, which meant a card could never see them - RADIO
+       could not use ► to star a station because the shell had already left
+       for the bezel. A card that does not want a key returns false and the
+       shell's meaning below applies unchanged. */
+    const c=staged();
+    if(c&&c.onKey){try{if(c.onKey(ctxFor(c),k)===true)return}catch(e){}}
     if(k==="left"||k==="right"){
       moveSel(k==="left"?-1:1);
       /* fullscreen browses card-to-card in place; the windowed view hands
@@ -1028,17 +1036,14 @@ function route(k){
       if(mode==="full")stageId=selectedCard().id; else mode="bezel";
       render();return;
     }
-    const c=staged();
-    if(c&&c.onKey){try{if(c.onKey(ctxFor(c),k)===true)return}catch(e){}}
-    /* The router consumes every arrow, so a card's text field was
-       unreachable with a remote — the Worker URL, the LAUNCH "add site" box
-       and the LAUNCH box could only be filled from the phone. If the card
-       did not want ▼, hand it to the first text field in the stage; the
-       keydown handler above already lets BACK blur out again. */
     /* A card that does not want OK gets the shell's meaning instead:
        toggle fullscreen. Previously the only route in was BACK to the
        bezel and OK again on the same tile, which nobody would guess. */
     if(k==="enter"){mode=(mode==="full")?"stage":"full";render();return}
+    /* The router consumes every arrow, so a card's text field was otherwise
+       unreachable with a remote - the Worker URL and the LAUNCH "add site"
+       box could only be filled from the phone. If the card did not want ▼,
+       hand it to the first text field in the stage; BACK blurs out again. */
     if(k==="down"){
       const inp=document.querySelector("#stage-body input[type=text]");
       if(inp&&document.activeElement!==inp){
