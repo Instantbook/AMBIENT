@@ -220,7 +220,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v26";
+const APP_VERSION="v27";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -477,6 +477,7 @@ let stageId=null;           /* id of the card in the main window */
 let selIdx=0;               /* highlighted slot, clockwise from top-left */
 let mode="bezel";           /* "bezel" | "stage" | "full" | "overview" */
 let ovSel=0;                /* overview selection */
+let dblTimer=null,dblId=null;  /* pending single-press, awaiting a double */
 let online=navigator.onLine;
 const bus={};
 function emit(ev,p){(bus[ev]||[]).forEach(f=>{try{f(p)}catch(e){}})}
@@ -860,7 +861,14 @@ document.addEventListener("click",e=>{
   const tile=t.closest(".tile");
   if(tile&&!tile.classList.contains("filler")){
     const c=CARDS.find(x=>x.id===tileCardId(tile));
-    if(c)openCard(c);
+    if(!c)return;
+    /* the browser hands us detail===2 on the second click of a double, so
+       the pointer gets the same shortcut as a double OK with no timer */
+    if(e.detail>=2&&c.onToggle){
+      try{c.onToggle(ctxFor(c))}catch(err){}
+      render();return;
+    }
+    openCard(c);
   }
 });
 document.addEventListener("mouseover",e=>{
@@ -931,9 +939,25 @@ function route(k){
     if(!c)return;
     /* OK on the card that is already loaded expands it instead of
        reloading it — that is the only route to fullscreen from the remote */
-    if(c.id===stageId)mode="full";
-    else{stageId=c.id;mode="stage"}
-    render();return;
+    const single=()=>{
+      if(c.id===stageId)mode="full";
+      else{stageId=c.id;mode="stage"}
+      render();
+    };
+    /* A card can offer a double-press shortcut (RADIO: start/stop the
+       selected station without going in). Distinguishing one press from two
+       means holding the first briefly, so ONLY cards that define onToggle
+       pay that delay — every other tile still opens instantly. */
+    if(!c.onToggle){single();return}
+    if(dblId===c.id&&dblTimer){
+      clearTimeout(dblTimer);dblTimer=null;dblId=null;
+      try{c.onToggle(ctxFor(c))}catch(e){}
+      render();return;
+    }
+    clearTimeout(dblTimer);
+    dblId=c.id;
+    dblTimer=setTimeout(()=>{dblTimer=null;dblId=null;single()},260);
+    return;
   }
   if(k==="back"){
     mode="overview";
@@ -1297,8 +1321,10 @@ const cardRadio={
     "<div class='state' style='margin-top:10px'>"+
     (ctx.audio.failed()?"⚠ that stream would not start — it may be "+
       "temporarily down; try another":
-      cur?"playing — OK on station stops/switches":
-      "▲▼ choose · OK play")+"</div>";
+      cur?"playing — OK on station stops/switches · "+
+        "double-OK the tile to stop from anywhere":
+      "▲▼ choose · OK play · "+
+        "double-OK the tile plays this one without opening")+"</div>";
   },
   renderCompact(ctx){
     const cur=ctx.audio.current();
@@ -1325,6 +1351,14 @@ const cardRadio={
     const list=this._list(ctx,this._data);
     if(!list[i])return;
     this.sel=i;ctx.audio.toggle(list[i]);render();
+  },
+  /* double-press the tile: start or stop the station the card is sitting
+     on, without opening the card at all. audio.toggle() already stops when
+     handed the stream that is playing, so this is one call. */
+  onToggle(ctx){
+    const st=this._list(ctx,this._data)[this.sel];
+    if(!st)return;
+    ctx.audio.toggle(st);
   }
 };
 
@@ -1661,6 +1695,7 @@ const cardSystem={
       " · room "+esc(companion.code())+"</div>"+
       "<div class='state' style='margin-top:10px'>"+
       "◄ ► ▲ ▼ move between tiles · OK open · OK again fullscreen<br>"+
+      "double-OK a RADIO tile starts/stops it without opening<br>"+
       "in a card: ▲ ▼ / OK act · BACK back to tiles · BACK again "+
       "overview</div>";
   },
