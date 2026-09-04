@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v47";
+const APP_VERSION="v48";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1469,9 +1469,13 @@ const cardRadio={
   },
   renderCompact(ctx){
     const cur=ctx.audio.current();
-    if(cur)return face("▶",esc(cur.label),
-      {color:"var(--up)",sub:esc(cur.region||"")});
     const list=this._list(ctx,this._data);
+    /* One audio bus serves RADIO and MUSIC, so "something is playing" is not
+       "MY station is playing" - without this the radio tile announced
+       whatever track MUSIC had started, play marker and all. */
+    if(cur&&list.some(st=>st.url===cur.url))
+      return face("▶",esc(cur.label),
+        {color:"var(--up)",sub:esc(cur.region||"")});
     const regions=[];
     list.forEach(s=>{if(regions.indexOf(s.region)<0)regions.push(s.region)});
     const nf=this._favs(ctx).length;
@@ -1862,81 +1866,143 @@ const cardLaunch={
 const cardMusic={
   id:"music",title:"MUSIC",icon:"note",
   pane:"listen",size:"large",order:52,refresh:null,offline:"local-first",
-  sel:0,_tracks:null,_scanned:false,
+  sel:0,_tracks:null,
+  /* A flat list does not survive a real library - 100 albums is a thousand
+     rows to scroll past on a D-pad. Browsing is artist -> album -> track,
+     ◄ climbs back up, and only at the top does ◄ fall through to the shell
+     and leave the card. */
+  _level:"artists",_artist:null,_album:null,
   init(ctx){this._scan(ctx)},
   _scan(ctx){
     try{
       if(!hostBridge||!hostBridge.listMedia){this._tracks=null;return}
       this._tracks=JSON.parse(hostBridge.listMedia()||"[]");
-      this._scanned=true;
     }catch(e){this._tracks=[]}
     try{ctx.rerender()}catch(e){}
   },
-  _list(){return Array.isArray(this._tracks)?this._tracks:[]},
+  _all(){return Array.isArray(this._tracks)?this._tracks:[]},
+  _artists(){
+    const seen=[],out=[];
+    this._all().forEach(t=>{
+      const a=t.dir||"Unknown";
+      if(seen.indexOf(a)<0){seen.push(a);out.push(a)}
+    });
+    return out.sort((x,y)=>x.localeCompare(y));
+  },
+  _albums(artist){
+    const seen=[];
+    this._all().forEach(t=>{
+      if((t.dir||"Unknown")!==artist)return;
+      const al=t.album||"Unknown";
+      if(seen.indexOf(al)<0)seen.push(al);
+    });
+    return seen.sort((x,y)=>x.localeCompare(y));
+  },
+  _tracksIn(artist,album){
+    return this._all().filter(t=>(t.dir||"Unknown")===artist&&
+      (t.album||"Unknown")===album);
+  },
+  /* what the current level is showing, as uniform rows */
+  _rows(){
+    if(this._level==="artists")
+      return this._artists().map(a=>({label:a,meta:
+        this._albums(a).length+" album"+(this._albums(a).length===1?"":"s")}));
+    if(this._level==="albums")
+      return this._albums(this._artist).map(al=>({label:al,meta:
+        this._tracksIn(this._artist,al).length+" tracks"}));
+    return this._tracksIn(this._artist,this._album).map(t=>
+      ({label:t.name,meta:"",track:t}));
+  },
   _item(t){
-    /* MediaStore gives real tags, so no filename cleanup is needed and the
-       right-hand column can carry the artist */
     let base="";try{base=hostBridge.mediaBase()}catch(e){}
     return{label:String(t.name||"track"),url:base+"?id="+t.id,
       cors:true,region:t.dir||""};
   },
+  _enter(ctx){
+    const rows=this._rows(),r=rows[this.sel];
+    if(!r)return;
+    if(this._level==="artists"){
+      this._artist=r.label;this._level="albums";this.sel=0;
+      /* one album is not a menu - skip straight to its tracks */
+      const als=this._albums(this._artist);
+      if(als.length===1){this._album=als[0];this._level="tracks"}
+      ctx.rerender();return;
+    }
+    if(this._level==="albums"){
+      this._album=r.label;this._level="tracks";this.sel=0;ctx.rerender();return;
+    }
+    ctx.audio.toggle(this._item(r.track));render();
+  },
+  _up(ctx){
+    if(this._level==="tracks"){
+      /* if we skipped the album list on the way down, skip it going back */
+      const single=this._albums(this._artist).length===1;
+      this._level=single?"artists":"albums";
+      this.sel=0;ctx.rerender();return true;
+    }
+    if(this._level==="albums"){this._level="artists";this.sel=0;
+      ctx.rerender();return true}
+    return false;                  /* at the top: let the shell take ◄ */
+  },
   render(ctx){
     if(!hostBridge||!hostBridge.listMedia)
       return "<div class='state'>Local files need the AMBIENT app \u2014 a web "+
-        "page has no filesystem to read. Put music in <span class='val'>"+
-        "Music/</span> or <span class='val'>AMBIENT/music/</span> on the card "+
-        "or internal storage.</div>";
-    const list=this._list();
-    if(!list.length)
+        "page has no filesystem to read.</div>";
+    if(!this._all().length)
       return "<div class='state'>No audio in the media library yet. Music "+
         "anywhere on internal storage or the card is picked up once Android "+
         "has indexed it.<br><br>OK rescans.</div>";
     const cur=ctx.audio.current();
-    return list.map((t,i)=>{
-      const it=this._item(t);
-      const now=cur&&cur.url===it.url;
-      return "<div class='row"+(i===this.sel?" hl sel":"")+
-        "' data-row='"+i+"'>"+
-        "<span class='"+(i===this.sel?"":"lbl")+"'>"+
-        (now?"<span style='color:var(--up)'>\u25b6 </span>":"")+
-        esc(it.label)+"</span>"+
-        "<span style='color:"+srcColor(it.region)+";font-size:12px'>"+
-        esc(it.region)+"</span></div>";
-    }).join("")+
-    "<div class='state' style='margin-top:10px'>\u25b2\u25bc choose \u00b7 "+
-    "OK play \u00b7 \u25c4 back to tiles \u00b7 "+list.length+" tracks</div>";
+    const crumb=this._level==="artists"?String(this._all().length)+" tracks \u00b7 "+
+        this._artists().length+" artists"
+      :this._level==="albums"?esc(this._artist)
+      :esc(this._artist)+" \u00b7 "+esc(this._album);
+    const rows=this._rows();
+    return "<div class='lbl' style='margin-bottom:8px'>"+crumb+"</div>"+
+      rows.map((r,i)=>{
+        const playing=r.track&&cur&&this._item(r.track).url===cur.url;
+        return "<div class='row"+(i===this.sel?" hl sel":"")+
+          "' data-row='"+i+"'>"+
+          "<span class='"+(i===this.sel?"":"lbl")+"'>"+
+          (playing?"<span style='color:var(--up)'>\u25b6 </span>":"")+
+          esc(r.label)+"</span>"+
+          "<span class='lbl' style='font-size:12px'>"+esc(r.meta)+
+          "</span></div>";
+      }).join("")+
+      "<div class='state' style='margin-top:10px'>\u25b2\u25bc choose \u00b7 OK "+
+      (this._level==="tracks"?"play":"open")+" \u00b7 \u25c4 "+
+      (this._level==="artists"?"back to tiles":"up a level")+"</div>";
   },
   renderCompact(ctx){
     if(!hostBridge||!hostBridge.listMedia)return face("\u2014","app only");
-    const cur=ctx.audio.current(),list=this._list();
-    const mine=cur&&list.some(t=>this._item(t).url===cur.url);
+    const cur=ctx.audio.current(),all=this._all();
+    const mine=cur&&all.some(t=>this._item(t).url===cur.url);
     if(mine)return face("\u25b6",esc(cur.label),
       {color:"var(--up)",sub:esc(cur.region||"")});
-    const dirs=[];
-    list.forEach(t=>{if(t.dir&&dirs.indexOf(t.dir)<0)dirs.push(t.dir)});
-    return face(list.length,"tracks",{dots:dirs.map(srcColor)});
-  },
-  _play(ctx,i){
-    const list=this._list();
-    if(!list[i])return;
-    this.sel=i;ctx.audio.toggle(this._item(list[i]));render();
+    const artists=this._artists();
+    return face(all.length,"tracks",
+      {dots:artists.map(srcColor),
+       sub:artists.length+" artist"+(artists.length===1?"":"s")});
   },
   onKey(ctx,k){
-    const list=this._list();
-    if(!list.length){
+    if(!this._all().length){
       if(k==="enter"){this._scan(ctx);return true}
       return false;
     }
-    if(k==="down"&&this.sel<list.length-1){this.sel++;ctx.rerender();return true}
+    const rows=this._rows();
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();return true}
     if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
-    if(k==="enter"){this._play(ctx,this.sel);return true}
+    if(k==="enter"){this._enter(ctx);return true}
+    if(k==="left")return this._up(ctx);
     return false;
   },
-  onPick(ctx,i){this._play(ctx,i)},
-  /* double-press the tile: start or stop the highlighted track in place */
+  onPick(ctx,i){this.sel=i;this._enter(ctx)},
+  /* double-press the tile: stop whatever this card started, or resume the
+     highlighted track when it is sitting on one */
   onToggle(ctx){
-    const list=this._list();
-    if(list[this.sel])ctx.audio.toggle(this._item(list[this.sel]));
+    const rows=this._rows(),r=rows[this.sel];
+    if(r&&r.track)ctx.audio.toggle(this._item(r.track));
+    else if(ctx.audio.current())ctx.audio.stop();
   }
 };
 

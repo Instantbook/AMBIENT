@@ -126,9 +126,11 @@ public class MainActivity extends Activity {
                     String artist = c.getString(2);
                     if (artist == null || "<unknown>".equals(artist))
                         artist = c.getString(3);
+                    String album = c.getString(3);
                     b.append("{\"id\":").append(c.getLong(0))
                      .append(",\"name\":\"").append(jesc(String.valueOf(c.getString(1))))
                      .append("\",\"dir\":\"").append(jesc(artist == null ? "" : artist))
+                     .append("\",\"album\":\"").append(jesc(album == null ? "" : album))
                      .append("\"}");
                 }
             } catch (Throwable t) {
