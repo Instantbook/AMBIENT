@@ -162,6 +162,9 @@ Almost everything is a "card" object registered via `registerCards([...])` near 
   `onPick(ctx, i)` (pointer click on row `i`), `onText`, `onInject`, `onScene`, `onTheme`.
 - Optional `renderCompact(ctx, data)` → small HTML for the card's rail/overview tile; cards without it get
   a placeholder dash tile.
+- Optional `renderFooter(ctx)` → HTML pinned below the scrolling body (`#stage-foot`). The stage is a flex
+  column — header and footer fixed, only the body scrolls. MUSIC's scrub bar lives here because appending
+  it to `render()` put it under thirteen track rows and off the bottom of the screen.
 - `sources: [{key, origin, path}]` declares what the card fetches (see Data layer).
 - `pinned: true` cards sit in a fixed frame slot (currently only `clock`), never rotate into the stage, and
   are immune to scene deactivation. `immersive: true` (only `vis`) drops the frame and every label in
@@ -274,22 +277,31 @@ The scheme, and the reasoning, since it went through several wrong versions:
 | | ▲▼ | ◄► | OK | BACK |
 |---|---|---|---|---|
 | **Bezel** | move between tiles (spatial) | move between tiles | open card · again = fullscreen | overview |
-| **A card** | choose a row | **seek ∓10s, ∓3s per repeat while held** — when there is a timeline | act on the row | **up one level** |
-| **RADIO** | choose | **► stars** — a live stream has no timeline | play/stop | back to tiles |
-| **MUSIC** | choose | seek | play / descend | track → album → artist → tiles |
-| **Fullscreen** | as the card | as the card | card action | leave fullscreen |
+| **A card** | choose a row | **back to the tiles** | act on the row | **up one level** |
+| **RADIO** | choose | ► stars (card consumes it) | play/stop | back to tiles |
+| **MUSIC** | choose | back to tiles | play/resume · **twice = pause** | track → album → tiles |
+| **Fullscreen** | as the card | **seek ∓10s, ∓3s per repeat held** | card action | leave fullscreen |
 | **Overview** | move | move | open | bezel |
 
 Principles worth keeping:
 
-- **BACK is "up one level", not "leave".** That is what frees ◄► for transport. A card
-  with a hierarchy climbs it via `onBack()` and only hands BACK to the shell at its
-  top, so there is always an exit and never a trap.
-- **◄► do what the medium allows.** Seekable audio gets scrubbing; a live stream
-  reports `Infinity` for duration and gets starring instead. Inventing a timeline for
-  a stream would be a lie.
-- **Fullscreen no longer cycles cards with ◄►.** Nobody flips between fullscreen
-  weather and fullscreen markets; the keys are worth more as transport.
+- **Two independent ways out of every card, always.** BACK climbs (`onBack()` returns
+  `true` while it still has somewhere to go) *and* ◄► leave. This is not redundancy for
+  its own sake — see the trap below.
+- **◄► inside a card must not be spent on anything else.** They were briefly taken for
+  seeking, and because they were also how you left a card, MUSIC became inescapable the
+  moment it owned the audio: the exit a thumb reaches for silently became a
+  fast-forward. BACK still worked, which was no comfort. **Do not reassign these keys in
+  the windowed view again.**
+- **Scrubbing lives in fullscreen**, where there are no tiles to walk back to and BACK is
+  the only exit anyway, so the pair is genuinely free. Cards gate it on `mode==="full"`.
+- **A single OK never pauses.** It starts or resumes; pausing is a deliberate
+  double-press. Pausing by accident while walking a track list was easy, and undoing it
+  took another press that reads as "stop".
+- **◄► do what the medium allows.** A live stream reports `Infinity` for duration and so
+  gets no timeline; inventing one would be a lie.
+- **Fullscreen does not cycle cards with ◄►.** Nobody flips between fullscreen weather
+  and fullscreen markets.
 - **Hold = `e.repeat`.** Android sends auto-repeat keydowns, so press-and-hold needs
   no timers and stops the instant the key is released.
 - **The staged card gets first refusal on every key except BACK.** Handling ◄► in the
