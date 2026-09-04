@@ -2,19 +2,21 @@
    AMBIENT reference Worker — deploy on YOUR Cloudflare account
    Endpoints:
      GET  /ws?room=CODE&role=display|remote  → WebSocket relay
-     POST /claude {messages:[{role,content}]} → Anthropic proxy
      GET  /feeds                              → [{title,source,link}]
-   Secrets (wrangler secret put):
-     ANTHROPIC_API_KEY   — your Anthropic key (never in the client)
+     GET  /radio[?path=genre/ambient]         → [{label,url,city,meta}]
    Vars (wrangler.toml [vars]):
      FEEDS  — comma-separated RSS URLs
-     MODEL  — optional, default "claude-opus-5"
      ALLOW_ORIGIN — your Pages origin, e.g.
                     "https://instantbook.github.io"
 
-   Only /ws needs the ROOMS Durable Object. Deploy without it and
-   /feeds and /claude still work — headlines and the CLAUDE card come
-   up, only the phone companion stays dark.
+   No secrets. The /claude proxy was removed along with the CLAUDE card:
+   the device's own Google Assistant covers that need, and leaving an
+   unauthenticated endpoint that spends API credit in place for a feature
+   nothing calls is not worth it. ALLOW_ORIGIN sets a CORS header, which
+   browsers honour and curl ignores — it was never protection.
+
+   Only /ws needs the ROOMS Durable Object. Deploy without it and /feeds
+   and /radio still work; only the phone companion stays dark.
    ============================================================ */
 
 // Several publishers reject requests without one, and a 403 body is HTML
@@ -41,50 +43,6 @@ export default {
         return new Response("bad room", { status: 400 });
       const id = env.ROOMS.idFromName(room);
       return env.ROOMS.get(id).fetch(req);
-    }
-
-    /* ---- Claude proxy: key lives HERE, server-side only ---- */
-    if (url.pathname === "/claude" && req.method === "POST") {
-      if (!env.ANTHROPIC_API_KEY)
-        return json({ error: "no key configured" }, 500, env);
-      let body;
-      try { body = await req.json(); } catch (e) {
-        return json({ error: "bad json" }, 400, env);
-      }
-      const messages = (body.messages || [])
-        .filter(m => m && (m.role === "user" || m.role === "assistant")
-          && typeof m.content === "string")
-        .slice(-12);
-      if (!messages.length)
-        return json({ error: "no messages" }, 400, env);
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: env.MODEL || "claude-opus-5",
-          // Deliberately small: the reply is spoken aloud and read on a HUD,
-          // so a long answer is a worse answer here, not a truncated one.
-          max_tokens: 600,
-          // Thinking is on by default on Opus 5. Low effort keeps the glasses
-          // responsive for short conversational turns; raise it if you start
-          // asking the card real questions.
-          output_config: { effort: "low" },
-          system: "You are Claude on a wearable glasses display. " +
-            "Replies are read on a HUD and spoken aloud: be concise, " +
-            "plain prose, no markdown, no lists.",
-          messages,
-        }),
-      });
-      if (!r.ok)
-        return json({ error: "anthropic " + r.status }, 502, env);
-      const d = await r.json();
-      const reply = (d.content || [])
-        .filter(b => b.type === "text").map(b => b.text).join("\n");
-      return json({ reply }, 200, env);
     }
 
     /* ---- radio: curated Greek stations from greek-radio.gr ----

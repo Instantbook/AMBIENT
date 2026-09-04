@@ -46,7 +46,7 @@ input:focus,textarea:focus{border-color:var(--accent)}
 
 <div class="sect" id="pair">
   <h2>PAIR</h2>
-  <input id="room" placeholder="room code (on the glasses — CLAUDE or system card)"
+  <input id="room" placeholder="room code (shown on the SYSTEM card)"
     autocapitalize="characters" maxlength="5">
   <div class="row2">
     <button onclick="connect()">Link to glasses</button>
@@ -71,12 +71,6 @@ input:focus,textarea:focus{border-color:var(--accent)}
     <button onclick="act('view.bezel')">TILES</button>
     <button onclick="act('view.overview')">OVERVIEW</button>
   </div>
-</div>
-
-<div class="sect">
-  <h2>ASK CLAUDE</h2>
-  <textarea id="chat" rows="2" placeholder="speak-to-type here, send to the glasses…"></textarea>
-  <div class="row2"><button onclick="sendChat()">Send to Claude</button></div>
 </div>
 
 <div class="sect">
@@ -115,9 +109,9 @@ input:focus,textarea:focus{border-color:var(--accent)}
     <button onclick="act('stage.weather')">weather</button>
     <button onclick="act('stage.markets')">markets</button>
     <button onclick="act('stage.headlines')">news</button>
-    <button onclick="act('stage.claude')">claude</button>
     <button onclick="act('stage.radio')">radio</button>
     <button onclick="act('stage.vis')">visual</button>
+    <button onclick="act('stage.device')">device</button>
     <button onclick="act('stage.launch')">launch</button>
     <button onclick="act('stage.scenes')">scenes</button>
     <button onclick="act('stage.system')">system</button>
@@ -155,11 +149,6 @@ function send(o){
 }
 function key(k){send({t:"key",k})}
 function act(id){send({t:"action",id})}
-function sendChat(){
-  const v=$("chat").value.trim();if(!v)return;
-  send({t:"inject",kind:"chat",v});$("chat").value="";
-  log("sent to claude");
-}
 function sendText(){
   const v=$("text").value.trim();if(!v)return;
   send({t:"text",v});$("text").value="";

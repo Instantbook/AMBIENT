@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v38";
+const APP_VERSION="v39";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -967,7 +967,7 @@ function route(k){
     if(c&&c.onKey){try{if(c.onKey(ctxFor(c),k)===true)return}catch(e){}}
     /* The router consumes every arrow, so a card's text field was
        unreachable with a remote — the Worker URL, the LAUNCH "add site" box
-       and the CLAUDE prompt could only be filled from the phone. If the card
+       and the LAUNCH box could only be filled from the phone. If the card
        did not want ▼, hand it to the first text field in the stage; the
        keydown handler above already lets BACK blur out again. */
     /* A card that does not want OK gets the shell's meaning instead:
@@ -1681,101 +1681,6 @@ const cardVis={
 };
 
 
-/* ---- claude: assistant chat — see it big, hear it spoken ----
-   Input arrives from the phone companion (primary) or the TV
-   keyboard field. Requests go to YOUR Worker's /claude endpoint,
-   which holds the Anthropic API key as a secret — the key never
-   exists client-side. Replies render on the glasses and are
-   spoken via speechSynthesis when voice is on (OK toggles).    */
-const cardClaude={
-  id:"claude",title:"CLAUDE",icon:"chat",
-  pane:"assist",size:"large",order:45,refresh:null,offline:"live-only",
-  accepts:["chat"],
-  msgs:[],busy:false,voice:true,scroll:0,
-  init(ctx){this.voice=ctx.storage.get("voice",true);
-    this.msgs=ctx.storage.get("msgs",[])},
-  _speak(text){
-    if(!this.voice)return;
-    try{
-      if(typeof speechSynthesis==="undefined")return;
-      speechSynthesis.cancel();
-      const u=new SpeechSynthesisUtterance(text.slice(0,600));
-      speechSynthesis.speak(u);
-    }catch(e){}
-  },
-  async _send(ctx,text){
-    text=String(text||"").trim();
-    if(!text||this.busy)return;
-    if(!WORKER_BASE()){ctx.rerender();return}
-    this.msgs.push({role:"user",content:text});
-    this.busy=true;this.scroll=0;ctx.rerender();
-    try{
-      const r=await fetch(WORKER_BASE().replace(/\/$/,"")+"/claude",{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({messages:this.msgs.slice(-12)})});
-      if(!r.ok)throw new Error("http-"+r.status);
-      const d=await r.json();
-      const reply=(d&&d.reply)||"(empty reply)";
-      this.msgs.push({role:"assistant",content:reply});
-      this._speak(reply);
-    }catch(e){
-      this.msgs.push({role:"assistant",
-        content:"⚠ relay error — "+e.message});
-    }
-    this.busy=false;
-    this.msgs=this.msgs.slice(-20);
-    ctx.storage.set("msgs",this.msgs);
-    ctx.rerender();
-  },
-  onText(ctx,v){this._send(ctx,v)},
-  onInject(ctx,item){if(item.kind==="chat")this._send(ctx,item.v)},
-  render(ctx){
-    if(!WORKER_BASE())
-      return "<div class='state'>Claude needs your <b>Worker URL</b> "+
-        "(system card). The Worker's <span class='val'>/claude</span> "+
-        "endpoint holds your Anthropic API key server-side.</div>";
-    const shown=this.msgs.slice(-(6+this.scroll),
-      this.msgs.length-this.scroll||undefined);
-    const log=shown.map(m=>{
-      const me=m.role==="user";
-      return "<div class='hl' style='border-left:2px solid "+
-        (me?"var(--faint)":"var(--accent)")+";padding-left:10px'>"+
-        "<span class='src'>"+(me?"YOU":"CLAUDE")+"</span>"+
-        esc(m.content)+"</div>";
-    }).join("")||"<div class='state'>Ask from the paired phone "+
-      "(room "+esc(companion.code())+") or type below.</div>";
-    return log+
-      (this.busy?"<div class='state'>thinking…</div>":"")+
-      "<input type='text' id='claude-in' placeholder='ask claude…' "+
-      "style='margin-top:10px'>"+
-      "<div class='state' style='margin-top:6px'>voice "+
-      (this.voice?"ON":"OFF")+" — OK toggles · ▲▼ scroll · link "+
-      (companion.state()==="on"?"●":"○")+" "+esc(companion.code())+
-      "</div>";
-  },
-  /* the old version pasted 60 raw characters of a reply into the tile and
-     let the box crop them; report state and volume instead */
-  renderCompact(ctx){
-    if(!WORKER_BASE())return face("—","needs worker URL");
-    if(this.busy)return face("…","thinking",{color:"var(--accent)"});
-    const n=this.msgs.filter(m=>m.role==="assistant").length;
-    return n?face(n,"replies · room "+esc(companion.code()))
-            :face("READY","room "+esc(companion.code()));
-  },
-  onKey(ctx,k){
-    if(k==="enter"){this.voice=!this.voice;
-      ctx.storage.set("voice",this.voice);
-      if(!this.voice&&typeof speechSynthesis!=="undefined")
-        {try{speechSynthesis.cancel()}catch(e){}}
-      ctx.rerender();return true}
-    if(k==="up"&&this.scroll<Math.max(0,this.msgs.length-6))
-      {this.scroll++;ctx.rerender();return true}
-    if(k==="down"&&this.scroll>0){this.scroll--;ctx.rerender();
-      return true}
-    return false;
-  }
-};
-
 /* ---- launch: web bookmarks — the box's missing browser home ----
    OK opens the selected site full-screen (BACK returns to AMBIENT;
    state persists, the shell is service-worker cached). Add sites via
@@ -1996,8 +1901,8 @@ const cardSystem={
       if(e.target&&e.target.id==="worker-in"){
         localStorage.setItem("ambient.worker",e.target.value.trim());
         CARDS.forEach(c=>refreshCard(c,true));
-        /* refreshCard returns early for cards with no sources, so CLAUDE
-           and LAUNCH kept showing "needs worker URL" after it was set.
+        /* refreshCard returns early for cards with no sources, so LAUNCH
+           kept showing stale state after the URL was set.
            Repaint the whole frame, not just the fetching cards. */
         render();
         companion.connect();   /* the relay lives on the same worker */
@@ -2019,18 +1924,11 @@ try{
 }catch(e){}
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardClaude,cardRadio,cardVis,cardLaunch,cardScenes,cardDevice,cardSystem]);
-document.addEventListener("change",e=>{
-  if(e.target&&e.target.id==="claude-in"&&e.target.value.trim()){
-    const v=e.target.value.trim();e.target.value="";
-    cardClaude._send(ctxFor(cardClaude),v);
-  }
-});
+  cardRadio,cardVis,cardLaunch,cardScenes,cardDevice,cardSystem]);
 applyScene(allScenes().find(sc=>sc.id===currentScene)||SCENES[0]);
 setOnline(navigator.onLine);
 companion.connect();
-on("companion",()=>{const c=staged();
-  if(c&&c.id==="claude")renderCard(c)});
+on("companion",()=>render());
 on("audio",p=>{
   const el=document.getElementById("st-audio");
   if(el)el.textContent=(p.state==="play"&&p.item)?

@@ -3,9 +3,6 @@
 # This is a SEPARATE worker from the NOUS one. It needs its own Durable
 # Object binding and its own ALLOW_ORIGIN, and keeping them apart means a
 # bad deploy here cannot take NOUS down.
-#
-# After deploying, set the secret (never put the key in this file):
-#   npx wrangler secret put ANTHROPIC_API_KEY
 
 name = "ambient-worker"
 main = "ambient-worker.js"
@@ -18,19 +15,15 @@ compatibility_date = "2026-09-01"
 # even with a User-Agent — it contributed nothing. tovima.gr serves cleanly.
 FEEDS = "https://feeds.bbci.co.uk/news/world/rss.xml,https://www.tovima.gr/feed/"
 
-# Replies are read on a HUD and spoken aloud, so they are short by design.
-MODEL = "claude-opus-5"
-
 # SECURITY: the 5-character room code is convenience pairing, NOT
-# authentication. This is the only thing stopping an arbitrary origin from
-# driving the glasses or spending your Anthropic credit, so it must name the
-# real Pages origin and must never be "*".
+# authentication, and this header is only honoured by browsers - curl ignores
+# it. It must name the real Pages origin and must never be "*".
 ALLOW_ORIGIN = "https://instantbook.github.io"
 
 # The WebSocket relay for the phone companion. One Durable Object per room
 # code. If Durable Objects are not available on your plan, delete BOTH of
-# these blocks and the /ws endpoint alone stops working — /feeds and /claude
-# are unaffected, so headlines and the CLAUDE card still work.
+# these blocks and the /ws endpoint alone stops working — /feeds and /radio
+# are unaffected, so headlines and stations still load.
 [[durable_objects.bindings]]
 name = "ROOMS"
 class_name = "Room"
