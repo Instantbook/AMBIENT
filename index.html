@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v49";
+const APP_VERSION="v50";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -378,11 +378,49 @@ const audioBus=(()=>{
     failed:()=>failedUrl,
     stop(){if(el){try{el.pause();el.src=""}catch(e){}}
       current=null;emit("audio",{state:"stop"})},
+    /* Pause is not stop. stop() clears src, which throws away the decode
+       position - so double-pressing a tile to stop a song and pressing again
+       to start it restarted from zero. Right for a live stream, wrong for a
+       track. Anything with a timeline pauses and keeps its place; a stream
+       still stops outright, because "resuming" a live feed where you left it
+       is not a thing that exists. */
+    pause(){if(el){try{el.pause()}catch(e){}}
+      emit("audio",{state:"pause",item:current})},
+    resume(){
+      if(!el||!current)return false;
+      try{
+        if(ac&&ac.state==="suspended")ac.resume();
+        const p=el.play();
+        if(p&&p.catch)p.catch(()=>fail(current));
+        emit("audio",{state:"play",item:current});
+        return true;
+      }catch(e){return false}
+    },
+    /* Transport. A live stream's duration is Infinity, which is the honest
+       answer and doubles as the test for "is there anything to scrub here". */
+    duration:()=>{try{const d=el?el.duration:0;
+      return (typeof d==="number"&&isFinite(d)&&d>0)?d:0}catch(e){return 0}},
+    position:()=>{try{return el?el.currentTime||0:0}catch(e){return 0}},
+    seekable(){return this.duration()>0},
+    seek(delta){
+      try{
+        if(!el)return false;
+        const d=el.duration;
+        if(!(typeof d==="number"&&isFinite(d)&&d>0))return false;
+        el.currentTime=Math.max(0,Math.min(d-0.5,(el.currentTime||0)+delta));
+        return true;
+      }catch(e){return false}
+    },
     toggle(item){
-      if(current&&item&&current.url===item.url){this.stop();return false}
+      if(current&&item&&current.url===item.url){
+        if(el&&el.paused)return this.resume();
+        if(this.seekable()){this.pause();return false}
+        this.stop();return false;
+      }
       return this.play(item);
     },
     current:()=>current,
+    paused:()=>!!(current&&el&&el.paused),
     playing:()=>!!(current&&el&&!el.paused),
     /* fills arr 0..1; returns true if real FFT, false if synthetic */
     getLevels(arr){
@@ -905,7 +943,10 @@ addEventListener("keydown",e=>{
     GoBack:"back",BrowserBack:"back"};
   const k=map[e.key];if(!k)return;
   e.preventDefault();
-  route(k);
+  /* Android sends auto-repeat keydowns while a key is held, so e.repeat is
+     all "press and hold" needs - no timers, and it stops the instant the
+     key is released. */
+  route(k,e.repeat===true);
 });
 /* ---------------- pointer input ----------------
    The Pocket TV's browser drives pages with a virtual mouse cursor and
@@ -997,7 +1038,7 @@ document.addEventListener("mouseover",e=>{
   if(i>=0&&i!==selIdx){selIdx=i;paintSel()}
 });
 
-function route(k){
+function route(k,held){
   if(mode==="overview"){
     /* columns must match what the grid actually rendered (auto-fill at
        150px + gap), or ▲▼ jump by the wrong stride */
@@ -1020,21 +1061,39 @@ function route(k){
 
   /* --- main window has focus (loaded or fullscreen) --- */
   if(mode==="stage"||mode==="full"){
-    /* BACK stays ahead of the card so a card can never trap you. */
-    if(k==="back"){mode="bezel";render();return}
+    /* BACK means "up one level", which is what frees ◄► for transport. A
+       card with its own hierarchy (MUSIC: artist -> album -> track) climbs
+       it first and only hands BACK to the shell at its top, so there is
+       always a way out and never a trap. */
+    if(k==="back"){
+      const b=staged();
+      if(b&&b.onBack){
+        let climbed=false;
+        try{climbed=b.onBack(ctxFor(b))===true}catch(e){}
+        if(climbed)return;
+      }
+      mode="bezel";render();return;
+    }
     /* Everything else gives the card first refusal, INCLUDING ◄►. They used
        to be handled up here, which meant a card could never see them - RADIO
        could not use ► to star a station because the shell had already left
        for the bezel. A card that does not want a key returns false and the
        shell's meaning below applies unchanged. */
     const c=staged();
-    if(c&&c.onKey){try{if(c.onKey(ctxFor(c),k)===true)return}catch(e){}}
+    if(c&&c.onKey){try{if(c.onKey(ctxFor(c),k,held)===true)return}catch(e){}}
     if(k==="left"||k==="right"){
+      /* Transport is NOT handled here. Whether ◄► should scrub depends on
+         whether the card in front of you owns what is playing, and only the
+         card knows that - deciding it up here would seek the music while
+         you were reading the weather. MUSIC and the visualiser consume
+         these keys themselves; everything else falls through to us.
+
+         Cycling card-to-card in fullscreen is gone: nobody flips between
+         fullscreen weather and fullscreen markets, and it spent the two
+         keys most worth having. Fullscreen now simply ignores them. */
+      if(mode==="full")return;
       moveSel(k==="left"?-1:1);
-      /* fullscreen browses card-to-card in place; the windowed view hands
-         focus back to the bezel so you can keep looking around */
-      if(mode==="full")stageId=selectedCard().id; else mode="bezel";
-      render();return;
+      mode="bezel";render();return;
     }
     /* A card that does not want OK gets the shell's meaning instead:
        toggle fullscreen. Previously the only route in was BACK to the
@@ -1771,7 +1830,17 @@ const cardVis={
   /* Returning false hands OK back to the shell, which turns it into
      fullscreen for any card that does not want the key itself. With one
      style left there is nothing to cycle. */
-  onKey(ctx,k){return false},
+  /* Fullscreen warp is where you actually are while a track plays, so the
+     transport keys have to reach it too - otherwise seeking would mean
+     leaving the visualiser to do it. Nothing to scrub on a live stream, so
+     they fall through to the shell as usual. */
+  onKey(ctx,k,held){
+    if((k==="left"||k==="right")&&ctx.audio.seekable()){
+      ctx.audio.seek((k==="left"?-1:1)*(held?3:10));
+      return true;
+    }
+    return false;
+  },
   /* clicking the canvas, or double-pressing the tile, goes fullscreen -
      the only thing worth doing with this card */
   onPick(){stageId="vis";mode="full";render()},
@@ -1872,13 +1941,42 @@ const cardMusic={
      ◄ climbs back up, and only at the top does ◄ fall through to the shell
      and leave the card. */
   _level:"artists",_artist:null,_album:null,
-  init(ctx){this._scan(ctx)},
+  init(ctx){
+    this._scan(ctx);
+    /* one repaint a second, and only while this card is both on stage and
+       the thing actually playing - otherwise it costs nothing */
+    setInterval(()=>{
+      const cur=audioBus.current();
+      if(!cur||audioBus.paused()||mode==="overview")return;
+      const st=staged();
+      if(!st||st.id!==this.id)return;
+      if(this._all().some(t=>this._item(t).url===cur.url))renderCard(this);
+    },1000);
+  },
   _scan(ctx){
     try{
       if(!hostBridge||!hostBridge.listMedia){this._tracks=null;return}
       this._tracks=JSON.parse(hostBridge.listMedia()||"[]");
     }catch(e){this._tracks=[]}
+    /* only on the first load - a later rescan must not yank someone out of
+       the album they are looking at */
+    if(this._artist===null&&this._level==="artists")this._top();
     try{ctx.rerender()}catch(e){}
+  },
+  /* Open at the highest level that is actually a choice. One artist is no
+     more a menu than one album: a single-row list you have to press through
+     is a speed bump, and on a one-artist library it made the whole
+     hierarchy look like it was not there at all. */
+  _top(){
+    const as=this._artists();
+    if(as.length!==1){
+      this._level="artists";this._artist=null;this._album=null;this.sel=0;return;
+    }
+    this._artist=as[0];
+    const als=this._albums(this._artist);
+    if(als.length===1){this._album=als[0];this._level="tracks"}
+    else{this._album=null;this._level="albums"}
+    this.sel=0;
   },
   _all(){return Array.isArray(this._tracks)?this._tracks:[]},
   _artists(){
@@ -1933,16 +2031,22 @@ const cardMusic={
     }
     ctx.audio.toggle(this._item(r.track));render();
   },
+  /* Climb, skipping on the way up exactly the levels that were skipped on
+     the way down, and returning false at the top so the shell can leave. */
   _up(ctx){
+    const solo=this._artists().length===1;
     if(this._level==="tracks"){
-      /* if we skipped the album list on the way down, skip it going back */
-      const single=this._albums(this._artist).length===1;
-      this._level=single?"artists":"albums";
+      if(this._albums(this._artist).length===1){
+        if(solo)return false;             /* both tiers skipped: at the top */
+        this._level="artists";
+      } else this._level="albums";
       this.sel=0;ctx.rerender();return true;
     }
-    if(this._level==="albums"){this._level="artists";this.sel=0;
-      ctx.rerender();return true}
-    return false;                  /* at the top: let the shell take ◄ */
+    if(this._level==="albums"){
+      if(solo)return false;               /* artist tier is not a choice */
+      this._level="artists";this.sel=0;ctx.rerender();return true;
+    }
+    return false;
   },
   render(ctx){
     if(!hostBridge||!hostBridge.listMedia)
@@ -1953,12 +2057,18 @@ const cardMusic={
         "anywhere on internal storage or the card is picked up once Android "+
         "has indexed it.<br><br>OK rescans.</div>";
     const cur=ctx.audio.current();
-    const crumb=this._level==="artists"?String(this._all().length)+" tracks \u00b7 "+
-        this._artists().length+" artists"
-      :this._level==="albums"?esc(this._artist)
-      :esc(this._artist)+" \u00b7 "+esc(this._album);
+    /* Where you are, stated plainly. This used to be one dim grey line and
+       at a glance the album list read as an undifferentiated track list. */
+    const where=this._level==="artists"
+      ?{head:String(this._all().length)+" tracks",
+        sub:this._artists().length+" artists"}
+      :this._level==="albums"
+      ?{head:esc(this._artist),sub:this._albums(this._artist).length+" albums"}
+      :{head:esc(this._album),sub:esc(this._artist)};
     const rows=this._rows();
-    return "<div class='lbl' style='margin-bottom:8px'>"+crumb+"</div>"+
+    return "<div style='margin-bottom:12px'>"+
+      "<div style='color:var(--accent);font-size:15px'>"+where.head+"</div>"+
+      "<div class='lbl'>"+where.sub+"</div></div>"+
       rows.map((r,i)=>{
         const playing=r.track&&cur&&this._item(r.track).url===cur.url;
         return "<div class='row"+(i===this.sel?" hl sel":"")+
@@ -1969,22 +2079,44 @@ const cardMusic={
           "<span class='lbl' style='font-size:12px'>"+esc(r.meta)+
           "</span></div>";
       }).join("")+
+      this._timeline(ctx)+
       "<div class='state' style='margin-top:10px'>\u25b2\u25bc choose \u00b7 OK "+
-      (this._level==="tracks"?"play":"open")+" \u00b7 \u25c4 "+
-      (this._level==="artists"?"back to tiles":"up a level")+"</div>";
+      (this._level==="tracks"?"play/pause":"open")+
+      " \u00b7 \u25c4\u25ba seek (hold to scrub) \u00b7 BACK "+
+      (this._level==="artists"?"to tiles":"up a level")+"</div>";
+  },
+  /* Elapsed / remaining with a scrub bar, shown only while this card owns
+     what is playing. A stream has no duration and gets no fake timeline. */
+  _timeline(ctx){
+    if(!this._owns(ctx))return "";
+    const cur=ctx.audio.current();
+    const d=ctx.audio.duration();
+    if(!d)return "";
+    const p=ctx.audio.position(),pct=Math.max(0,Math.min(100,p/d*100));
+    const mmss=v=>{v=Math.max(0,Math.floor(v));
+      return Math.floor(v/60)+":"+String(v%60).padStart(2,"0")};
+    return "<div style='margin-top:14px'>"+
+      "<div class='lbl' style='margin-bottom:5px'>"+
+      (ctx.audio.paused()?"\u2016 ":"\u25b6 ")+esc(cur.label)+"</div>"+
+      "<div style='height:4px;background:var(--faint);border-radius:2px;"+
+      "overflow:hidden'><div style='height:100%;width:"+pct.toFixed(1)+
+      "%;background:var(--accent)'></div></div>"+
+      "<div class='lbl' style='display:flex;justify-content:space-between;"+
+      "margin-top:5px'><span>"+mmss(p)+"</span><span>-"+mmss(d-p)+
+      "</span></div></div>";
   },
   renderCompact(ctx){
     if(!hostBridge||!hostBridge.listMedia)return face("\u2014","app only");
     const cur=ctx.audio.current(),all=this._all();
     const mine=cur&&all.some(t=>this._item(t).url===cur.url);
-    if(mine)return face("\u25b6",esc(cur.label),
-      {color:"var(--up)",sub:esc(cur.region||"")});
+    if(mine)return face(ctx.audio.paused()?"\u2016":"\u25b6",esc(cur.label),
+      {color:ctx.audio.paused()?"":"var(--up)",sub:esc(cur.region||"")});
     const artists=this._artists();
     return face(all.length,"tracks",
       {dots:artists.map(srcColor),
        sub:artists.length+" artist"+(artists.length===1?"":"s")});
   },
-  onKey(ctx,k){
+  onKey(ctx,k,held){
     if(!this._all().length){
       if(k==="enter"){this._scan(ctx);return true}
       return false;
@@ -1993,16 +2125,32 @@ const cardMusic={
     if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();return true}
     if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
     if(k==="enter"){this._enter(ctx);return true}
-    if(k==="left")return this._up(ctx);
+    /* ◄► scrub, but only while this card is the one playing - otherwise they
+       keep the shell's meaning and take you back to the tiles. ∓10s a press,
+       ∓3s per auto-repeat so a hold runs smoothly instead of in 10s jumps. */
+    if((k==="left"||k==="right")&&this._owns(ctx)&&ctx.audio.seekable()){
+      ctx.audio.seek((k==="left"?-1:1)*(held?3:10));
+      ctx.rerender();return true;
+    }
     return false;
   },
+  _owns(ctx){
+    const cur=ctx.audio.current();
+    return !!(cur&&this._all().some(t=>this._item(t).url===cur.url));
+  },
+  /* BACK climbs the browse hierarchy before it leaves the card */
+  onBack(ctx){return this._up(ctx)},
   onPick(ctx,i){this.sel=i;this._enter(ctx)},
-  /* double-press the tile: stop whatever this card started, or resume the
-     highlighted track when it is sitting on one */
+  /* Double-press the tile: pause or resume whatever this card is playing
+     without opening it, or start the highlighted track. */
   onToggle(ctx){
+    const cur=ctx.audio.current();
+    if(cur&&this._all().some(t=>this._item(t).url===cur.url)){
+      if(ctx.audio.paused())ctx.audio.resume(); else ctx.audio.pause();
+      render();return;
+    }
     const rows=this._rows(),r=rows[this.sel];
     if(r&&r.track)ctx.audio.toggle(this._item(r.track));
-    else if(ctx.audio.current())ctx.audio.stop();
   }
 };
 
