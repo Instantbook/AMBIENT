@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v48";
+const APP_VERSION="v49";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1465,7 +1465,7 @@ const cardRadio={
       cur?"▲▼ choose · OK stops/switches · ► star "+
         "· double-OK the tile stops from anywhere":
       "▲▼ choose · OK play · ► star · "+
-        "◄ back to tiles")+"</div>";
+        "BACK to tiles")+"</div>";
   },
   renderCompact(ctx){
     const cur=ctx.audio.current();
@@ -2123,10 +2123,10 @@ const cardSystem={
       " · cards "+CARDS.length+" · "+(online?"online":"offline")+
       " · room "+esc(companion.code())+"</div>"+
       "<div class='state' style='margin-top:10px'>"+
-      "◄ ► ▲ ▼ move between tiles · OK open · OK again fullscreen<br>"+
-      "double-OK a RADIO tile starts/stops it without opening<br>"+
-      "in a card: ▲ ▼ / OK act · BACK back to tiles · BACK again "+
-      "overview</div>";
+      "tiles: ◄►▲▼ move · OK open · OK again "+
+      "fullscreen · double-OK plays a RADIO/MUSIC tile in place<br>"+
+      "in a card: ▲▼ choose · OK act · ◄► seek "+
+      "when there is a timeline (hold to scrub) · BACK up a level</div>";
   },
   renderCompact(ctx){
     return face(ctx.theme(),APP_VERSION+" · "+CARDS.length+" cards");
