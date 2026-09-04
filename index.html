@@ -261,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v57";
+const APP_VERSION="v58";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2500,6 +2500,188 @@ const cardMusic={
    figures. The CPU figure is honestly THIS APP's share of one core -
    system-wide /proc/stat is not readable to an ordinary app on modern
    Android - so it is labelled that way rather than passed off as the box's. */
+/* ---- video: local files, played in the cockpit where possible ----
+   The WebView decodes what Chromium decodes - H.264/VP8/VP9 in mp4 or webm.
+   A real library is full of AVI and MKV it cannot touch, and those would
+   otherwise index fine, start, and show a black rectangle: the same silent
+   failure WMA caused for audio. So playability is decided BEFORE playing,
+   from the MIME MediaStore reports, and anything else is handed to the
+   device's own player rather than pretended at. */
+const VIDEO_OK=/^video\/(mp4|webm|ogg|x-m4v|quicktime)$/i;
+
+const cardVideo={
+  id:"video",title:"VIDEO",icon:"wave",
+  pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
+  sel:0,_items:null,_level:"folders",_dir:null,_playing:null,_note:"",
+  /* Immersive only while something is actually playing. The shell reads
+     this at render time, so it can change: the browse list wants the frame
+     and its hints, a playing video wants the whole panel and nothing else
+     lit. A card that claimed immersive always would lose its own list. */
+  get immersive(){return !!this._playing},
+  init(ctx){this._scan(ctx)},
+  _scan(ctx){
+    try{
+      if(!hostBridge||!hostBridge.listVideo){this._items=null;return}
+      this._items=JSON.parse(hostBridge.listVideo()||"[]");
+    }catch(e){this._items=[]}
+    if(this._dir===null&&this._level==="folders")this._top();
+    try{ctx.rerender()}catch(e){}
+  },
+  _all(){return Array.isArray(this._items)?this._items:[]},
+  _folders(){
+    const seen=[];
+    this._all().forEach(v=>{
+      const d=v.dir||"Video";
+      if(seen.indexOf(d)<0)seen.push(d);
+    });
+    return seen.sort((a,b)=>a.localeCompare(b));
+  },
+  _inDir(d){return this._all().filter(v=>(v.dir||"Video")===d)},
+  _playable(v){return VIDEO_OK.test(String(v&&v.mime||""))},
+  _url(v){
+    let base="";try{base=hostBridge.mediaBase()}catch(e){}
+    return base+"?vid="+v.id;
+  },
+  _dur(ms){
+    const s=Math.max(0,Math.round((ms||0)/1000));
+    const m=Math.floor(s/60),h=Math.floor(m/60);
+    return h?h+":"+String(m%60).padStart(2,"0")+":"+String(s%60).padStart(2,"0")
+            :m+":"+String(s%60).padStart(2,"0");
+  },
+  _rows(){
+    if(this._level==="folders")
+      return this._folders().map(d=>({label:d,
+        meta:this._inDir(d).length+" videos",dir:d}));
+    return this._inDir(this._dir).map(v=>({
+      label:v.name||v.file||"video",
+      meta:this._dur(v.dur)+(this._playable(v)?"":" · external"),
+      video:v}));
+  },
+  _top(){
+    const f=this._folders();
+    /* one folder is not a menu, same rule as MUSIC */
+    if(f.length===1){this._dir=f[0];this._level="files"}
+    else{this._dir=null;this._level="folders"}
+    this.sel=0;
+  },
+  _enter(ctx){
+    const r=this._rows()[this.sel];
+    if(!r)return;
+    if(r.dir){this._dir=r.dir;this._level="files";this.sel=0;
+      ctx.rerender();return}
+    const v=r.video;
+    if(!this._playable(v)){
+      /* hand it over rather than showing a black rectangle */
+      let ok=false;
+      try{ok=hostBridge&&hostBridge.openVideo&&hostBridge.openVideo(v.id)}
+      catch(e){}
+      this._note=ok?"opened in the device player"
+        :"nothing on the device can play "+(v.mime||"this file");
+      ctx.rerender();return;
+    }
+    /* one thing plays at a time: a video with radio underneath it is a
+       fault, not a feature */
+    try{audioBus.stop()}catch(e){}
+    this._playing=v;this._note="";
+    mode="full";render();
+  },
+  _stop(){
+    const el=document.getElementById("vid-el");
+    if(el){try{el.pause()}catch(e){}}
+    this._playing=null;
+  },
+  _up(ctx){
+    if(this._playing){this._stop();render();return true}
+    if(this._level==="files"&&this._folders().length>1){
+      this._level="folders";this._dir=null;this.sel=0;ctx.rerender();
+      return true;
+    }
+    return false;
+  },
+  onBack(ctx){return this._up(ctx)},
+  render(ctx){
+    if(!hostBridge||!hostBridge.listVideo)
+      return "<div class='state'>Local video needs the AMBIENT app — a web "+
+        "page has no filesystem to read.</div>";
+    if(this._playing){
+      const v=this._playing;
+      return "<video id='vid-el' src='"+esc(this._url(v))+"' autoplay "+
+        "playsinline style='width:100%;height:100%;object-fit:contain;"+
+        "background:#000'></video>";
+    }
+    if(!this._all().length)
+      return "<div class='state'>No video in the media library yet. "+
+        "Anything on internal storage or the card is picked up once Android "+
+        "has indexed it.<br><br>OK rescans.</div>";
+    const rows=this._rows();
+    const head=this._level==="files"
+      ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>"+esc(this._dir||"")+"</div><div class='lbl'>"+
+       rows.length+" videos</div></div>":"";
+    return head+rows.map((r,i)=>{
+      const ext=r.video&&!this._playable(r.video);
+      return "<div class='row"+(i===this.sel?" hl sel":"")+
+        "' data-row='"+i+"'>"+
+        "<span class='"+(i===this.sel?"":"lbl")+"'>"+esc(r.label)+
+        (r.dir?" ›":"")+"</span>"+
+        "<span class='lbl' style='font-size:12px"+
+        (ext?";color:var(--warn)":"")+"'>"+esc(r.meta)+"</span></div>";
+    }).join("")+
+    (this._note?"<div class='state' style='margin-top:8px;"+
+      "color:var(--warn)'>"+esc(this._note)+"</div>":"")+
+    "<div class='state' style='margin-top:10px'>▲▼ choose · OK "+
+    (this._level==="folders"?"open":"play")+
+    " · ◄► back to tiles · BACK "+
+    (this._playing?"stop":this._level==="files"&&this._folders().length>1
+      ?"up a level":"to tiles")+
+    "<br>amber = this device can play it but the cockpit cannot; "+
+    "OK hands it to the system player</div>";
+  },
+  renderCompact(ctx){
+    if(!hostBridge||!hostBridge.listVideo)return face("—","app only");
+    const all=this._all();
+    if(this._playing)return face("▶",esc(this._playing.name||"video"),
+      {color:"var(--up)"});
+    if(!all.length)return face("—","no video");
+    const ok=all.filter(v=>this._playable(v)).length;
+    return face(all.length,"videos",
+      {sub:ok===all.length?this._folders().length+" folders"
+        :ok+" playable here"});
+  },
+  onKey(ctx,k,held){
+    if(this._playing){
+      const el=document.getElementById("vid-el");
+      if(k==="enter"&&el){
+        try{el.paused?el.play():el.pause()}catch(e){}
+        return true;
+      }
+      /* fullscreen is the only place these are free, same rule as MUSIC */
+      if((k==="left"||k==="right")&&el&&mode==="full"){
+        try{el.currentTime=Math.max(0,
+          (el.currentTime||0)+(k==="left"?-1:1)*(held?3:10))}catch(e){}
+        return true;
+      }
+      return false;
+    }
+    if(!this._all().length){
+      if(k==="enter"){this._scan(ctx);return true}
+      return false;
+    }
+    const rows=this._rows();
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;this._note="";
+      ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._note="";ctx.rerender();
+      return true}
+    if(k==="enter"){this._enter(ctx);return true}
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._enter(ctx)},
+  onToggle(ctx){
+    if(this._playing){this._stop();render();return}
+    stageId="video";mode="full";render();
+  }
+};
+
 /* ---- display: listening does not need a picture ----
    The glasses are a worn micro-OLED panel, so brightness is most of what
    the battery is spent on and a black frame is genuinely free. This card
@@ -2705,7 +2887,7 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardMusic,cardVis,cardLaunch,cardScenes,cardDisplay,
+  cardRadio,cardMusic,cardVideo,cardVis,cardLaunch,cardScenes,cardDisplay,
   cardDevice,cardSystem]);
 /* restore the brightness chosen last time - after loadConfig(), which has
    already seeded localStorage from the durable file */

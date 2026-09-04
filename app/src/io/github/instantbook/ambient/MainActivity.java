@@ -175,6 +175,95 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String mediaBase() { return atAmbient ? MEDIA_HOST : ""; }
 
+        /**
+         * [{id,name,dur,mime,w,h,size,dir}] of every video MediaStore knows.
+         *
+         * mime matters more here than it did for audio: the WebView plays
+         * what Chromium plays - H.264/VP8/VP9 in mp4/webm - and a library of
+         * home video is full of AVI and MKV that it cannot decode. The card
+         * uses this to decide up front whether to play a file inline or to
+         * hand it to the system player, rather than starting playback and
+         * showing a black rectangle.
+         */
+        @JavascriptInterface
+        public String listVideo() {
+            if (!atAmbient) return "[]";
+            StringBuilder b = new StringBuilder("[");
+            Cursor c = null;
+            try {
+                Uri uri = MediaStore.Video.Media.getContentUri("external");
+                c = getContentResolver().query(uri, new String[]{
+                        MediaStore.Video.Media._ID,
+                        MediaStore.Video.Media.DISPLAY_NAME,
+                        MediaStore.Video.Media.DURATION,
+                        MediaStore.Video.Media.MIME_TYPE,
+                        MediaStore.Video.Media.WIDTH,
+                        MediaStore.Video.Media.HEIGHT,
+                        MediaStore.Video.Media.SIZE,
+                        MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+                        MediaStore.Video.Media.TITLE},
+                        null, null,
+                        MediaStore.Video.Media.BUCKET_DISPLAY_NAME + "," +
+                        MediaStore.Video.Media.DISPLAY_NAME);
+                boolean first = true;
+                int n = 0;
+                while (c != null && c.moveToNext() && n < 500) {
+                    n++;
+                    if (!first) b.append(",");
+                    first = false;
+                    String title = c.getString(8);
+                    if (title == null || title.length() == 0)
+                        title = c.getString(1);
+                    String dir = c.getString(7);
+                    b.append("{\"id\":").append(c.getLong(0))
+                     .append(",\"name\":\"").append(jesc(String.valueOf(title)))
+                     .append("\",\"file\":\"").append(jesc(String.valueOf(c.getString(1))))
+                     .append("\",\"dir\":\"").append(jesc(dir == null ? "" : dir))
+                     .append("\",\"mime\":\"").append(jesc(String.valueOf(c.getString(3))))
+                     .append("\",\"dur\":").append(c.getLong(2))
+                     .append(",\"w\":").append(c.getInt(4))
+                     .append(",\"h\":").append(c.getInt(5))
+                     .append(",\"size\":").append(c.getLong(6))
+                     .append("}");
+                }
+            } catch (Throwable t) {
+                // same policy as listMedia: report nothing rather than half
+            } finally {
+                try { if (c != null) c.close(); } catch (Throwable ignored) {}
+            }
+            return b.append("]").toString();
+        }
+
+        /**
+         * Hand a video to whatever on the device can actually play it.
+         * The escape hatch for the formats Chromium will not decode - an
+         * AVI is still watchable, just not by us, and refusing to open it
+         * at all would be worse than briefly leaving the cockpit. BACK
+         * returns here, which onKeyUp already handles.
+         */
+        @JavascriptInterface
+        public boolean openVideo(final long id) {
+            if (!atAmbient) return false;
+            try {
+                Uri item = ContentUris.withAppendedId(
+                        MediaStore.Video.Media.getContentUri("external"), id);
+                String mime = getContentResolver().getType(item);
+                final android.content.Intent i =
+                        new android.content.Intent(
+                                android.content.Intent.ACTION_VIEW);
+                i.setDataAndType(item, mime == null ? "video/*" : mime);
+                i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (i.resolveActivity(getPackageManager()) == null) return false;
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        try { startActivity(i); } catch (Throwable ignored) {}
+                    }
+                });
+                return true;
+            } catch (Throwable t) { return false; }
+        }
+
         @JavascriptInterface
         public String configPath() {
             return atAmbient ? configFile().getAbsolutePath() : "";
@@ -390,13 +479,22 @@ public class MainActivity extends Activity {
 
     private WebResourceResponse serveMedia(String url, String rangeHeader) {
         try {
+            // ?id= is a track, ?vid= is a video. They live in different
+            // MediaStore collections and the same numeric id means different
+            // files in each, so the prefix is what picks the collection -
+            // guessing would serve the wrong thing rather than nothing.
+            boolean video = false;
             int q = url.indexOf("?id=");
+            int skip = 4;
+            if (q < 0) { q = url.indexOf("?vid="); skip = 5; video = true; }
             if (q < 0) return null;
             long id;
-            try { id = Long.parseLong(url.substring(q + 4).trim()); }
+            try { id = Long.parseLong(url.substring(q + skip).trim()); }
             catch (Throwable t) { return null; }
             Uri item = ContentUris.withAppendedId(
-                    MediaStore.Audio.Media.getContentUri("external"), id);
+                    video ? MediaStore.Video.Media.getContentUri("external")
+                          : MediaStore.Audio.Media.getContentUri("external"),
+                    id);
 
             long len = -1;
             android.content.res.AssetFileDescriptor afd = null;
@@ -409,6 +507,15 @@ public class MainActivity extends Activity {
             }
             if (len < 0) return null;
             String name = item.toString();
+            // A content:// URI has no extension, so mimeFor() falls back to
+            // audio/mpeg - which would label every video as audio and give
+            // the page a <video> element that decodes nothing. The resolver
+            // knows the real type; only fall back when it does not.
+            String mime = null;
+            try { mime = getContentResolver().getType(item); }
+            catch (Throwable ignored) {}
+            if (mime == null || mime.length() == 0)
+                mime = video ? "video/mp4" : mimeFor(name);
 
             Map<String, String> h = new HashMap<String, String>();
             h.put("Access-Control-Allow-Origin", "*");   // makes the FFT work
@@ -437,13 +544,13 @@ public class MainActivity extends Activity {
                 }
                 h.put("Content-Range", "bytes " + start + "-" + end + "/" + len);
                 h.put("Content-Length", String.valueOf(end - start + 1));
-                return new WebResourceResponse(mimeFor(name), null,
+                return new WebResourceResponse(mime, null,
                         206, "Partial Content", h, in);
             }
             h.put("Content-Length", String.valueOf(len));
             InputStream in = getContentResolver().openInputStream(item);
             if (in == null) return null;
-            return new WebResourceResponse(mimeFor(name), null,
+            return new WebResourceResponse(mime, null,
                     200, "OK", h, in);
         } catch (Throwable t) {
             return new WebResourceResponse("text/plain", "UTF-8", 404,
