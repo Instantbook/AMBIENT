@@ -97,19 +97,25 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean writeConfig(String json) {
             if (!atAmbient || json == null) return false;
-            FileOutputStream o = null;
-            try {
-                File c = configFile();
-                File dir = c.getParentFile();
-                if (dir != null && !dir.exists() && !dir.mkdirs()) return false;
-                o = new FileOutputStream(c);
-                o.write(json.getBytes("UTF-8"));
-                return true;
-            } catch (Throwable t) {
-                return false;
-            } finally {
-                try { if (o != null) o.close(); } catch (Throwable ignored) {}
+            byte[] bytes;
+            try { bytes = json.getBytes("UTF-8"); }
+            catch (Throwable t) { return false; }
+            for (File dir : configDirs()) {
+                FileOutputStream o = null;
+                try {
+                    if (!dir.exists() && !dir.mkdirs()) continue;
+                    File c = new File(dir, "config.json");
+                    o = new FileOutputStream(c);
+                    o.write(bytes);
+                    cachedConfig = c;      // remember what actually worked
+                    return true;
+                } catch (Throwable t) {
+                    // not writable after all - try the next candidate
+                } finally {
+                    try { if (o != null) o.close(); } catch (Throwable ignored) {}
+                }
             }
+            return false;
         }
 
         @JavascriptInterface
@@ -162,8 +168,17 @@ public class MainActivity extends Activity {
      * Android/data and IS cleared with the app, so the card reports which
      * of the two is in use rather than quietly degrading.
      */
-    private File configFile() {
-        File base = null;
+    private File cachedConfig = null;
+
+    /**
+     * Candidate homes, best first. Testing canWrite() on a volume ROOT said
+     * the microSD was unwritable and sent everything to internal storage,
+     * even though the AMBIENT directory on the card may well be writable -
+     * so this probes the actual directory it would use, and the caller
+     * falls through on a real failure rather than a predicted one.
+     */
+    private File[] configDirs() {
+        java.util.List<File> out = new java.util.ArrayList<File>();
         boolean allFiles = Build.VERSION.SDK_INT < 30
                 || Environment.isExternalStorageManager();
         if (allFiles) {
@@ -171,16 +186,29 @@ public class MainActivity extends Activity {
             if (vols != null) {
                 for (File v : vols) {
                     String n = v.getName();
-                    // skip the emulated internal volume and the self symlink:
-                    // what is left is the removable card, if one is present
+                    // the removable card first: it survives a factory reset
+                    // and can be pulled and read in any computer
                     if ("emulated".equals(n) || "self".equals(n)) continue;
-                    if (v.isDirectory() && v.canWrite()) { base = v; break; }
+                    if (v.isDirectory()) out.add(new File(v, "AMBIENT"));
                 }
             }
-            if (base == null) base = new File("/storage/emulated/0");
-            return new File(new File(base, "AMBIENT"), "config.json");
+            out.add(new File("/storage/emulated/0/AMBIENT"));
         }
-        return new File(getExternalFilesDir(null), "config.json");
+        File priv = getExternalFilesDir(null);
+        if (priv != null) out.add(priv);   // always works; cleared with the app
+        return out.toArray(new File[0]);
+    }
+
+    private File configFile() {
+        if (cachedConfig != null) return cachedConfig;
+        File first = null;
+        for (File d : configDirs()) {
+            File f = new File(d, "config.json");
+            if (first == null) first = f;
+            if (f.exists()) { cachedConfig = f; return f; }   // keep using it
+        }
+        return first != null ? first
+                : new File(getFilesDir(), "config.json");
     }
 
     private final Host host = new Host();

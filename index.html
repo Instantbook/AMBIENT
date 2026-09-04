@@ -233,8 +233,72 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v41";
+const APP_VERSION="v42";
 
+/* This block must come FIRST. Module-level initialisers read localStorage
+   the moment this script parses - themeName defaults, and the companion
+   mints a room code if it finds none - so restoring the file any later
+   than this restores nothing: the defaults have already been taken. That
+   is exactly what happened, and it looked like the file was not being
+   read at all. */
+/* ---------------- durable settings ----------------
+   localStorage is the wrong home for anything the user typed: `pm clear`
+   wipes it, uninstalling wipes it, and it cannot be read or edited from a
+   computer. When the wrapper app is present, the same values are mirrored
+   to a plain JSON file on the microSD (/AMBIENT/config.json, alongside the
+   media folders), so bookmarks and preferences survive a wipe and can be
+   edited over MTP. localStorage stays the working store - synchronous and
+   fast - and the file is the durable copy.
+
+   Only user intent is mirrored. The SWR data cache (ambient.data.*) is
+   derived and would just churn the card. */
+const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
+  "ambient.scenes","ambient.room",
+  "ambient.card.launch.links","ambient.card.vis.style"];
+const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
+
+function loadConfig(){
+  if(!hostBridge||!hostBridge.readConfig)return;
+  let cfg=null;
+  try{const raw=hostBridge.readConfig();if(raw)cfg=JSON.parse(raw)}catch(e){}
+  if(!cfg||typeof cfg!=="object")return;
+  /* the file is the durable copy, so on a fresh install it seeds
+     localStorage; anything already set on THIS device wins, because it is
+     what the person most recently chose here */
+  CFG_KEYS.forEach(k=>{
+    if(cfg[k]===undefined||localStorage.getItem(k)!==null)return;
+    try{localStorage.setItem(k,cfg[k])}catch(e){}
+  });
+}
+let _cfgT=null;
+function persist(){
+  if(!hostBridge||!hostBridge.writeConfig)return;
+  clearTimeout(_cfgT);
+  /* debounced: a burst of changes (applying a scene touches several keys)
+     should be one write, not five */
+  _cfgT=setTimeout(()=>{
+    const out={_note:"AMBIENT settings. Edit freely; the app reads this on "+
+      "start. Values are the raw localStorage strings.",
+      _saved:new Date().toISOString()};
+    CFG_KEYS.forEach(k=>{
+      const v=localStorage.getItem(k);
+      if(v!==null)out[k]=v;
+    });
+    try{hostBridge.writeConfig(JSON.stringify(out,null,2))}catch(e){}
+  },1200);
+}
+
+/* The wrapper also compiles the Worker URL in (from app/worker.url, which is
+   gitignored), so a wiped localStorage no longer means retyping it on a TV
+   keyboard. A value already set by hand always wins. */
+loadConfig();
+try{
+  if(hostBridge&&hostBridge.worker){
+    const u=(hostBridge.worker()||"").trim();
+    if(u&&!localStorage.getItem("ambient.worker"))
+      localStorage.setItem("ambient.worker",u);
+  }
+}catch(e){}
 /* ---------------- theme bus ---------------- */
 const THEMES={
   "day-cyan":     {accent:"#4FD4E8",soft:"rgba(79,212,232,.14)"},
@@ -1913,68 +1977,10 @@ const cardSystem={
 };
 
 /* ---------------- boot ---------------- */
-/* ---------------- durable settings ----------------
-   localStorage is the wrong home for anything the user typed: `pm clear`
-   wipes it, uninstalling wipes it, and it cannot be read or edited from a
-   computer. When the wrapper app is present, the same values are mirrored
-   to a plain JSON file on the microSD (/AMBIENT/config.json, alongside the
-   media folders), so bookmarks and preferences survive a wipe and can be
-   edited over MTP. localStorage stays the working store - synchronous and
-   fast - and the file is the durable copy.
 
-   Only user intent is mirrored. The SWR data cache (ambient.data.*) is
-   derived and would just churn the card. */
-const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
-  "ambient.scenes","ambient.room",
-  "ambient.card.launch.links","ambient.card.vis.style"];
-const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
-
-function loadConfig(){
-  if(!hostBridge||!hostBridge.readConfig)return;
-  let cfg=null;
-  try{const raw=hostBridge.readConfig();if(raw)cfg=JSON.parse(raw)}catch(e){}
-  if(!cfg||typeof cfg!=="object")return;
-  /* the file is the durable copy, so on a fresh install it seeds
-     localStorage; anything already set on THIS device wins, because it is
-     what the person most recently chose here */
-  CFG_KEYS.forEach(k=>{
-    if(cfg[k]===undefined||localStorage.getItem(k)!==null)return;
-    try{localStorage.setItem(k,cfg[k])}catch(e){}
-  });
-}
-let _cfgT=null;
-function persist(){
-  if(!hostBridge||!hostBridge.writeConfig)return;
-  clearTimeout(_cfgT);
-  /* debounced: a burst of changes (applying a scene touches several keys)
-     should be one write, not five */
-  _cfgT=setTimeout(()=>{
-    const out={_note:"AMBIENT settings. Edit freely; the app reads this on "+
-      "start. Values are the raw localStorage strings.",
-      _saved:new Date().toISOString()};
-    CFG_KEYS.forEach(k=>{
-      const v=localStorage.getItem(k);
-      if(v!==null)out[k]=v;
-    });
-    try{hostBridge.writeConfig(JSON.stringify(out,null,2))}catch(e){}
-  },1200);
-}
-
-/* The wrapper also compiles the Worker URL in (from app/worker.url, which is
-   gitignored), so a wiped localStorage no longer means retyping it on a TV
-   keyboard. A value already set by hand always wins. */
-loadConfig();
-try{
-  if(hostBridge&&hostBridge.worker){
-    const u=(hostBridge.worker()||"").trim();
-    if(u&&!localStorage.getItem("ambient.worker"))
-      localStorage.setItem("ambient.worker",u);
-  }
-}catch(e){}
-/* Write once at boot so the file EXISTS from first run. persist() only
-   fires on change, so without this a device that never changed a setting
-   would have nothing on the card to find or edit - and a file you cannot
-   discover is no better than localStorage. */
+/* Write once at boot so the file EXISTS from first run: persist() only
+   fires on change, and a file you cannot find is no better than
+   localStorage. */
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
