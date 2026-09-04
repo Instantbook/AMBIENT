@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v36";
+const APP_VERSION="v37";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1531,6 +1531,7 @@ const VIS_STYLES=[
        the beat drives its amplitude. Both ends fade to transparent via the
        gradient, so it reads as continuing off into the field instead of
        stopping at an edge. */
+    const live=audioBus.playing();
     const pw=w*(0.72+bass*0.04),x0=(w-pw)/2,my=h*0.5,step=pw/(n-1||1);
     const amp=h*0.13*(1+flash*0.5);
     /* Deflect against a LOCAL baseline, not the global mean. Subtracting
@@ -1554,7 +1555,12 @@ const VIS_STYLES=[
       /* ease both ends back to the centreline so the trace settles into
          the fade instead of ending on a step */
       const win=Math.pow(Math.sin(Math.PI*(i/(n-1||1))),0.6);
-      pts.push([x0+i*step,my+(v-base)*amp*3.2*win]);
+      /* At rest, rest. The synthetic fallback keeps a gentle idle wave so
+         the other styles still breathe as a screensaver, but a trace that
+         never settles reads as a fault rather than as silence - so when
+         nothing is playing this collapses to a true horizontal line and
+         only the starfield keeps drifting. */
+      pts.push([x0+i*step,live?my+(v-base)*amp*3.2*win:my]);
     }
     const trace=()=>{
       g.beginPath();
@@ -1894,6 +1900,70 @@ const cardLaunch={
   }
 };
 
+/* ---- device: what a web page cannot see about its own machine ----
+   There is no browser API for system CPU or RAM: navigator.deviceMemory is
+   a coarse rounded hint and performance.memory is only the JS heap. Both
+   real numbers come from the wrapper app over a JS bridge. In a plain
+   browser the bridge is absent and this card says so rather than inventing
+   figures. The CPU figure is honestly THIS APP's share of one core -
+   system-wide /proc/stat is not readable to an ordinary app on modern
+   Android - so it is labelled that way rather than passed off as the box's. */
+const cardDevice={
+  id:"device",title:"DEVICE",icon:"gauge",
+  pane:"system",size:"medium",order:85,refresh:null,offline:"cached",
+  _s:null,
+  init(ctx){
+    const poll=()=>{
+      try{
+        this._s=(window.AmbientHost&&AmbientHost.stats)
+          ?JSON.parse(AmbientHost.stats()):null;
+      }catch(e){this._s=null}
+      ctx.rerender();
+    };
+    poll();setInterval(poll,3000);
+  },
+  _g(kb){return (kb/1048576).toFixed(1)},
+  _bar(pct,col){
+    return "<div style='height:6px;background:var(--faint);border-radius:3px;"+
+      "overflow:hidden;margin-top:6px'><div style='height:100%;width:"+
+      Math.max(0,Math.min(100,pct))+"%;background:"+col+"'></div></div>";
+  },
+  render(ctx){
+    const s=this._s;
+    if(!s)return "<div class='state'>System CPU and memory are not visible "+
+      "to a web page — these come from the AMBIENT app over its host "+
+      "bridge, so this card only fills in there.<br><br>"+
+      (navigator.hardwareConcurrency?"browser reports "+
+        navigator.hardwareConcurrency+" cores":"")+
+      (navigator.deviceMemory?" · ~"+navigator.deviceMemory+
+        "GB RAM (rounded)":"")+"</div>";
+    const used=s.totalKb-s.availKb;
+    const mpct=s.totalKb?used/s.totalKb*100:0;
+    const cpu=s.cpu>=0?s.cpu:0;
+    /* against ONE core, which is what the figure measures */
+    const cpct=Math.min(100,cpu);
+    const warm=mpct>85?"var(--down)":mpct>70?"var(--warn)":"var(--up)";
+    return "<div class='row'><span class='lbl'>MEMORY</span>"+
+      "<span class='val'>"+this._g(used)+" / "+this._g(s.totalKb)+
+      " GB</span></div>"+this._bar(mpct,warm)+
+      "<div class='lbl' style='margin-top:4px'>"+this._g(s.availKb)+
+      " GB free</div>"+
+      "<div class='row' style='margin-top:16px'><span class='lbl'>"+
+      "APP CPU</span><span class='val'>"+cpu.toFixed(1)+
+      "%</span></div>"+this._bar(cpct,"var(--accent)")+
+      "<div class='lbl' style='margin-top:4px'>share of one core · "+
+      s.cores+" cores available</div>"+
+      "<div class='state' style='margin-top:14px'>"+esc(s.model||"")+
+      "</div>";
+  },
+  renderCompact(ctx){
+    const s=this._s;
+    if(!s)return face("—","host only");
+    const cpu=s.cpu>=0?s.cpu.toFixed(0)+"%":"—";
+    return face(cpu,"app cpu",{sub:this._g(s.availKb)+" GB free"});
+  }
+};
+
 /* ---- scenes: apply a saved composition (spec §5) ---- */
 const cardScenes={
   id:"scenes",title:"SCENES",icon:"layers",
@@ -1983,8 +2053,19 @@ const cardSystem={
 };
 
 /* ---------------- boot ---------------- */
+/* The wrapper app compiles the Worker URL in (from app/worker.url, which is
+   gitignored) and hands it over here, so a wiped localStorage no longer means
+   retyping it on a TV keyboard. A value already set by hand always wins. */
+try{
+  if(window.AmbientHost&&AmbientHost.worker){
+    const u=(AmbientHost.worker()||"").trim();
+    if(u&&!localStorage.getItem("ambient.worker"))
+      localStorage.setItem("ambient.worker",u);
+  }
+}catch(e){}
+
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardClaude,cardRadio,cardVis,cardLaunch,cardScenes,cardSystem]);
+  cardClaude,cardRadio,cardVis,cardLaunch,cardScenes,cardDevice,cardSystem]);
 document.addEventListener("change",e=>{
   if(e.target&&e.target.id==="claude-in"&&e.target.value.trim()){
     const v=e.target.value.trim();e.target.value="";

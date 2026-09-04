@@ -7,3 +7,6 @@ app/build/
 
 # wrangler's local state
 .wrangler/
+
+# Device-local config baked into the APK at build time, never published
+app/worker.url
