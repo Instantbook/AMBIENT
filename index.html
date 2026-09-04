@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v40";
+const APP_VERSION="v41";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1971,6 +1971,11 @@ try{
       localStorage.setItem("ambient.worker",u);
   }
 }catch(e){}
+/* Write once at boot so the file EXISTS from first run. persist() only
+   fires on change, so without this a device that never changed a setting
+   would have nothing on the card to find or edit - and a file you cannot
+   discover is no better than localStorage. */
+persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
   cardRadio,cardVis,cardLaunch,cardScenes,cardDevice,cardSystem]);
