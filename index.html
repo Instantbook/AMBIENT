@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v42";
+const APP_VERSION="v43";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -254,7 +254,8 @@ const APP_VERSION="v42";
    derived and would just churn the card. */
 const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.scenes","ambient.room",
-  "ambient.card.launch.links","ambient.card.vis.style"];
+  "ambient.card.launch.links","ambient.card.vis.style",
+  "ambient.card.radio.favs"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
 function loadConfig(){
@@ -1407,6 +1408,15 @@ const cardRadio={
      list groups instead of arriving in arbitrary order. */
   sources:[{key:"radio.list",origin:"worker",path:"/radio"}],
   sel:0,
+  /* Favourites are stored as stream URLs, not indexes: the station list is
+     fetched fresh and re-sorted, so any position would go stale the moment
+     greek-radio.gr reorders its page. */
+  _favs(ctx){const f=ctx.storage.get("favs",[]);return Array.isArray(f)?f:[]},
+  _toggleFav(ctx,url){
+    const f=this._favs(ctx),i=f.indexOf(url);
+    if(i>=0)f.splice(i,1); else f.push(url);
+    ctx.storage.set("favs",f);      /* -> persist() -> config.json */
+  },
   _list(ctx,data){
     const raw=(data&&data["radio.list"])||ctx.cachedOnly("radio.list")||[];
     const gr=(Array.isArray(raw)?raw:[])
@@ -1416,7 +1426,12 @@ const cardRadio={
         meta:String(s.meta||"").trim()}))
       .sort((a,b)=>a.region.localeCompare(b.region,"el")||
                    a.label.localeCompare(b.label,"el"));
-    return RADIO_PRESETS.concat(gr);
+    const favs=this._favs(ctx);
+    const all=RADIO_PRESETS.concat(gr).map(s=>
+      ({...s,fav:favs.indexOf(s.url)>=0}));
+    /* stable sort, so starred stations rise to the top while everything
+       else keeps its preset-then-by-city order */
+    return all.sort((a,b)=>(b.fav?1:0)-(a.fav?1:0));
   },
   render(ctx,data){
     const list=this._list(ctx,data);
@@ -1433,6 +1448,7 @@ const cardRadio={
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+
         (now?"<span style='color:var(--up)'>▶ </span>":"")+
         (bad?"<span style='color:var(--down)'>⚠ </span>":"")+
+        (st.fav?"<span style='color:var(--warn)'>★ </span>":"")+
         esc(st.label)+"</span>"+
         "<span style='color:"+rc+";font-size:12px'>"+
         (insecure?"<span class='lbl' style='margin-right:8px'>http</span>":"")+
@@ -1441,10 +1457,10 @@ const cardRadio={
     "<div class='state' style='margin-top:10px'>"+
     (ctx.audio.failed()?"⚠ that stream would not start — it may be "+
       "temporarily down; try another":
-      cur?"playing — OK on station stops/switches · "+
-        "double-OK the tile to stop from anywhere":
-      "▲▼ choose · OK play · "+
-        "double-OK the tile plays this one without opening")+"</div>";
+      cur?"▲▼ choose · OK stops/switches · ► star "+
+        "· double-OK the tile stops from anywhere":
+      "▲▼ choose · OK play · ► star · "+
+        "◄ back to tiles")+"</div>";
   },
   renderCompact(ctx){
     const cur=ctx.audio.current();
@@ -1453,7 +1469,9 @@ const cardRadio={
     const list=this._list(ctx,this._data);
     const regions=[];
     list.forEach(s=>{if(regions.indexOf(s.region)<0)regions.push(s.region)});
-    return face(list.length,"stations",{dots:regions.map(srcColor)});
+    const nf=this._favs(ctx).length;
+    return face(list.length,"stations",
+      {dots:regions.map(srcColor),sub:nf?nf+" ★ starred":""});
   },
   onKey(ctx,k){
     const list=this._list(ctx,this._data);
@@ -1463,6 +1481,13 @@ const cardRadio={
     if(k==="enter"&&list[this.sel]){
       ctx.audio.toggle(list[this.sel]);
       render(); /* now-playing shows on radio + visualizer tiles */
+      return true;
+    }
+    /* ► stars the highlighted station. Consuming the key means it does not
+       also jump tiles; ◄ is still the way out, so the card keeps an exit. */
+    if(k==="right"&&list[this.sel]){
+      this._toggleFav(ctx,list[this.sel].url);
+      render();
       return true;
     }
     return false;
