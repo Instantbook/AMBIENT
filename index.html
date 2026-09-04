@@ -154,6 +154,21 @@ body.bare #stage::before,body.bare #stage::after{display:none}
 body.bare #stage h2{display:none}
 body.bare #stage-foot{display:none}
 body.bare #vis-foot{display:none}
+/* Blackout: the panel is micro-OLED, so a black pixel is an unlit pixel and
+   costs nothing to hold. Listening to the radio with the dashboard alight is
+   paying full display power to look at a clock. Kept as an overlay rather
+   than by hiding #app, so nothing relayouts and coming back is instant.
+   The dot is deliberate - a display that is on but perfectly black is
+   indistinguishable from one that has crashed. */
+#blackout{position:fixed;inset:0;background:#000;z-index:9999;
+  display:none;align-items:center;justify-content:center}
+body.blackout #blackout{display:flex}
+body.blackout{cursor:none}
+#blackout .pip{width:3px;height:3px;border-radius:50%;background:#123;
+  animation:pip 4s ease-in-out infinite}
+@keyframes pip{0%,100%{opacity:.10}50%{opacity:.45}}
+#blackout .hint{position:absolute;bottom:14px;left:0;right:0;text-align:center;
+  font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:#111}
 /* fullscreen: collapse the grid to the stage; rails stay in the DOM so
    renderCard() can keep refreshing their tiles behind the scenes */
 #cockpit.full{grid-template-areas:"s";grid-template-rows:1fr;
@@ -229,6 +244,8 @@ input[type=text]:focus{border-color:var(--accent)}
       <div class="body" id="stage-body"></div>
       <div id="stage-foot"></div>
     </section></div>
+    <div id="blackout"><div class="pip"></div>
+      <div class="hint">SCREEN OFF · ANY KEY WAKES</div></div>
     <div class="rail rail-v" id="rail-right"></div>
     <div class="rail rail-h" id="rail-bottom"></div>
     <div id="overview"></div>
@@ -244,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v54";
+const APP_VERSION="v55";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -266,7 +283,7 @@ const APP_VERSION="v54";
 const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.scenes","ambient.room",
   "ambient.card.launch.links","ambient.card.vis.style",
-  "ambient.card.radio.favs"];
+  "ambient.card.radio.favs","ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
 function loadConfig(){
@@ -639,6 +656,49 @@ let CARDS=[];
 let stageId=null;           /* id of the card in the main window */
 let selIdx=0;               /* highlighted slot, clockwise from top-left */
 let mode="bezel";           /* "bezel" | "stage" | "full" | "overview" */
+
+/* ---- display power ----
+   Independent of `mode`: the screen can be dark whatever the shell is doing,
+   and waking must restore exactly what was there. Audio is untouched by
+   both, which is the entire point - the glasses are for listening as often
+   as for looking.
+
+   `dim` also asks the host to lower the panel backlight. That only reaches
+   the hardware inside the wrapper app; in a browser it is a no-op and the
+   CSS dimming is all you get, which is still most of the benefit on OLED. */
+const screenState={off:false,dim:1};
+function hostBrightness(v){
+  try{
+    if(hostBridge&&hostBridge.setBrightness)hostBridge.setBrightness(v);
+  }catch(e){}
+}
+function screenSleep(){
+  if(screenState.off)return;
+  screenState.off=true;
+  document.body.classList.add("blackout");
+  hostBrightness(0.01);
+  emit("screen",{off:true});
+}
+function screenWake(){
+  if(!screenState.off)return;
+  screenState.off=false;
+  document.body.classList.remove("blackout");
+  hostBrightness(screenState.dim);
+  emit("screen",{off:false});
+  render();
+}
+function setDim(v,quiet){
+  screenState.dim=Math.max(0.05,Math.min(1,v));
+  if(!quiet){
+    try{localStorage.setItem("ambient.dim",String(screenState.dim))}catch(e){}
+  }
+  /* CSS filter dims what is drawn even when the panel itself cannot be
+     turned down - a browser has no brightness API at all. */
+  document.getElementById("app").style.filter =
+    screenState.dim>=0.999?"":"brightness("+screenState.dim.toFixed(2)+")";
+  hostBrightness(screenState.dim);
+  persist();
+}
 let ovSel=0;                /* overview selection */
 let dblTimer=null,dblId=null;  /* pending single-press, awaiting a double */
 let online=navigator.onLine;
@@ -1060,6 +1120,10 @@ document.addEventListener("mouseover",e=>{
 });
 
 function route(k,held){
+  /* Blackout eats the first key and nothing else. Waking must not also do
+     whatever that key normally means - reaching for the remote in the dark
+     should not skip a track or leave the card you were on. */
+  if(screenState.off){screenWake();return}
   if(mode==="overview"){
     /* columns must match what the grid actually rendered (auto-fill at
        150px + gap), or ▲▼ jump by the wrong stride */
@@ -1535,7 +1599,14 @@ const RADIO_PRESETS=[
     cors:true,region:"ambient"},
   {label:"DEEP SPACE ONE · SOMAFM",
     url:"https://ice1.somafm.com/deepspaceone-128-mp3",
-    cors:true,region:"space"}
+    cors:true,region:"space"},
+  /* Ερμιονίδα FM 104.3. A preset rather than a scraped result so it is
+     there even when the Worker or greek-radio.gr is not. Verified https,
+     128k mp3, and it answers with Access-Control-Allow-Origin: * - which
+     is why it can be cors:true and drive the real FFT, unlike most of the
+     Greek stations, which play but leave the visualiser on synthetic. */
+  {label:"ΕΡΜΙΟΝΙΔΑ FM 104.3",url:"https://ermionida.radioca.st/stream",
+    cors:true,region:"ermionida"}
 ];
 const cardRadio={
   id:"radio",title:"RADIO",icon:"radio",
@@ -1666,16 +1737,18 @@ const VIS_STYLES=[
      Deliberately kept off the extreme edges and away from full-white: on
      glasses the frame corners are the first thing to fall outside comfort,
      and a black ground is what keeps the display restful. */
-  {id:"warp",trails:true,_s:null,_roll:0,_bAvg:0,_flash:0,_neb:null,_nebT:0,
+  {id:"warp",trails:true,_s:null,_roll:0,_bAvg:0,_flash:0,
    draw(g,w,h,lv){
+    /* Only the bass band is needed now. The dominant-band index and the
+       treble average existed to pick the nebula's hue and are gone with
+       it - leaving them would be a per-frame scan of the whole spectrum
+       for a value nothing reads. */
     const n=lv.length;
-    let bass=0,treb=0,bn=0,tn=0,domI=0,domV=0;
+    let bass=0,bn=0;
     for(let i=0;i<n;i++){
-      const v=lv[i];
-      if(v>domV){domV=v;domI=i}
-      if(i<n*0.20){bass+=v;bn++} else if(i>n*0.55){treb+=v;tn++}
+      if(i<n*0.20){bass+=lv[i];bn++}
     }
-    bass=bn?bass/bn:0;treb=tn?treb/tn:0;
+    bass=bn?bass/bn:0;
 
     /* BEAT PUNCH — a transient against a slow running average, not the
        raw level. Continuous mapping just makes everything wobble; what
@@ -1685,36 +1758,12 @@ const VIS_STYLES=[
     this._flash=Math.max(this._flash*0.88,Math.min(1,hit*3.2));
     const flash=this._flash;
 
-    /* NEBULA — three dim blobs tinted by whatever band is loudest, painted
-       once into a small offscreen and blitted. Full-size radial gradients
-       every frame would be the most expensive thing here; a 192px canvas
-       scaled up costs one drawImage and nobody can tell at this blur. */
-    const now=Date.now();
-    if(!this._neb){
-      this._neb=document.createElement("canvas");
-      this._neb.width=this._neb.height=192;
-    }
-    if(now-this._nebT>3500){
-      this._nebT=now;
-      const nc=this._neb.getContext("2d");
-      if(nc){
-        const hue=300-(domI/Math.max(1,n))*260;
-        nc.clearRect(0,0,192,192);
-        for(let b=0;b<3;b++){
-          const bx=40+Math.random()*112,by=40+Math.random()*112,
-                br=50+Math.random()*70;
-          const rg=nc.createRadialGradient(bx,by,0,bx,by,br);
-          rg.addColorStop(0,"hsla("+((hue+b*38)%360)+",85%,58%,0.55)");
-          rg.addColorStop(1,"hsla("+((hue+b*38)%360)+",85%,58%,0)");
-          nc.fillStyle=rg;nc.fillRect(0,0,192,192);
-        }
-      }
-    }
-    /* trails mean a constant blit reaches a steady state ~3x its alpha,
-       so this is deliberately far dimmer than it looks */
-    const dx=Math.sin(now/21000)*w*0.10,dy=Math.cos(now/26000)*h*0.10;
-    g.globalAlpha=0.040+flash*0.030;
-    try{g.drawImage(this._neb,dx-w*0.2,dy-h*0.2,w*1.4,h*1.4)}catch(e){}
+    /* The nebula lived here: three tinted radial blobs drifting behind the
+       field. On glasses they did not read as distant gas, they read as lens
+       flares smeared across the view - a defect of the optics rather than
+       part of the scene. Removed; the field and the trace are the whole
+       image now. Anything reintroduced here has to survive the same test,
+       because on a worn display a soft bright blob IS a flare. */
 
     /* ROLL — a slow turn of the whole field. Nothing says "flight" like
        the stars not being level. */
@@ -2267,6 +2316,57 @@ const cardMusic={
    figures. The CPU figure is honestly THIS APP's share of one core -
    system-wide /proc/stat is not readable to an ordinary app on modern
    Android - so it is labelled that way rather than passed off as the box's. */
+/* ---- display: listening does not need a picture ----
+   The glasses are a worn micro-OLED panel, so brightness is most of what
+   the battery is spent on and a black frame is genuinely free. This card
+   exists so radio and music can run with the display dark or dimmed
+   without stopping anything. */
+const cardDisplay={
+  id:"display",title:"DISPLAY",icon:"gauge",
+  pane:"system",size:"small",order:86,refresh:null,offline:"cached",
+  sel:0,
+  _rows(){
+    return [
+      {label:"SCREEN OFF",meta:"audio keeps playing",act:()=>screenSleep()},
+      {label:"DIM 25%",meta:"",act:()=>setDim(0.25)},
+      {label:"DIM 50%",meta:"",act:()=>setDim(0.5)},
+      {label:"FULL BRIGHTNESS",meta:"",act:()=>setDim(1)},
+    ];
+  },
+  render(ctx){
+    const pct=Math.round(screenState.dim*100);
+    return this._rows().map((r,i)=>
+      "<div class='row"+(i===this.sel?" hl sel":"")+"' data-row='"+i+"'>"+
+      "<span class='"+(i===this.sel?"":"lbl")+"'>"+esc(r.label)+"</span>"+
+      "<span class='lbl' style='font-size:12px'>"+esc(r.meta)+"</span></div>"
+      ).join("")+
+      "<div class='state' style='margin-top:10px'>brightness <span "+
+      "class='val'>"+pct+"%</span>"+
+      (hostBridge&&hostBridge.setBrightness?"":
+        " · panel control needs the AMBIENT app; in a browser this dims "+
+        "what is drawn instead")+
+      "<br>▲▼ choose · OK apply · double-OK the tile "+
+      "blacks the screen · any key wakes it</div>";
+  },
+  renderCompact(ctx){
+    if(screenState.off)return face("OFF","screen",{color:"var(--dim)"});
+    const pct=Math.round(screenState.dim*100);
+    return face(pct+"%",pct>=100?"brightness":"dimmed",
+      {color:pct<100?"var(--accent)":""});
+  },
+  onKey(ctx,k){
+    const rows=this._rows();
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"){rows[this.sel].act();render();return true}
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._rows()[i].act();render()},
+  /* double-press the tile: straight to black from anywhere on the bezel,
+     which is the way you actually want to reach it */
+  onToggle(){screenSleep()}
+};
+
 const cardDevice={
   id:"device",title:"DEVICE",icon:"gauge",
   pane:"system",size:"medium",order:85,refresh:null,offline:"cached",
@@ -2421,7 +2521,14 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardMusic,cardVis,cardLaunch,cardScenes,cardDevice,cardSystem]);
+  cardRadio,cardMusic,cardVis,cardLaunch,cardScenes,cardDisplay,
+  cardDevice,cardSystem]);
+/* restore the brightness chosen last time - after loadConfig(), which has
+   already seeded localStorage from the durable file */
+try{
+  const d=parseFloat(localStorage.getItem("ambient.dim"));
+  if(isFinite(d)&&d>0&&d<1)setDim(d,true);
+}catch(e){}
 applyScene(allScenes().find(sc=>sc.id===currentScene)||SCENES[0]);
 setOnline(navigator.onLine);
 companion.connect();

@@ -94,6 +94,34 @@ public class MainActivity extends Activity {
         public String worker() { return atAmbient ? WORKER_URL : ""; }
 
         /**
+         * Panel backlight, 0..1. A web page has no brightness API at all, so
+         * dimming from JS can only darken what is drawn - which helps on an
+         * OLED but still runs the panel at full power. This lowers the panel
+         * itself, which is where the battery actually goes when the glasses
+         * are being used to listen rather than to watch.
+         *
+         * Window-scoped on purpose: it reverts the moment AMBIENT loses
+         * focus, so a dimmed dashboard can never leave the whole device dark
+         * with no obvious way back. Values are clamped above zero for the
+         * same reason - 0.0f on some panels is indistinguishable from off.
+         */
+        @JavascriptInterface
+        public void setBrightness(final float v) {
+            if (!atAmbient) return;
+            final float b = v < 0.01f ? 0.01f : (v > 1f ? 1f : v);
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    try {
+                        android.view.WindowManager.LayoutParams lp =
+                                getWindow().getAttributes();
+                        lp.screenBrightness = b;
+                        getWindow().setAttributes(lp);
+                    } catch (Throwable ignored) {}
+                }
+            });
+        }
+
+        /**
          * [{id,name,dir}] from MediaStore.
          *
          * Walking the filesystem directly could not see the microSD at all -
