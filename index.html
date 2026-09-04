@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v33";
+const APP_VERSION="v34";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1515,52 +1515,47 @@ const VIS_STYLES=[
       }
     }
 
-    /* THE RING — no fill. A single closed contour whose top and bottom
-       edges ride the spectrum, so you see the shape the bars would have
-       made while still seeing the starfield straight through it. Drawn
-       twice: wide and faint for bloom, then thin and bright. */
-    const pw=w*(0.44+bass*0.045),x0=(w-pw)/2,my=h*0.5,step=pw/(n-1||1);
-    const amp=h*0.135*(1+flash*0.22);
-    const top=[],bot=[];
+    /* THE LINE — one horizontal trace, no closed shape and no fill. A
+       ring is an object sitting in front of you; a line is just presence,
+       which is what suits a worn display. It rides the spectrum around its
+       own centre so it ripples both ways rather than humping upward, and
+       the beat drives its amplitude. Both ends fade to transparent via the
+       gradient, so it reads as continuing off into the field instead of
+       stopping at an edge. */
+    const pw=w*(0.72+bass*0.04),x0=(w-pw)/2,my=h*0.5,step=pw/(n-1||1);
+    const amp=h*0.13*(1+flash*0.5);
+    let mean=0;for(let i=0;i<n;i++)mean+=lv[i];mean/=(n||1);
+    const pts=[];
     for(let i=0;i<n;i++){
-      /* light smoothing across neighbours — the raw envelope is spiky and
-         a spiky outline reads as noise rather than as a form */
+      /* smoothed across neighbours — a raw envelope is spiky, and a spiky
+         line reads as noise rather than as motion */
       const a=lv[i-1]!==undefined?lv[i-1]:lv[i];
       const b=lv[i+1]!==undefined?lv[i+1]:lv[i];
       const v=(a+lv[i]*2+b)/4;
-      const y=Math.max(1.5,v*amp);
-      top.push([x0+i*step,my-y]);bot.push([x0+i*step,my+y]);
+      pts.push([x0+i*step,my+(v-mean)*amp*2]);
     }
-    const contour=()=>{
+    const trace=()=>{
       g.beginPath();
-      g.moveTo(top[0][0],top[0][1]);
-      for(let i=1;i<top.length;i++){
-        const mx=(top[i-1][0]+top[i][0])/2,myy=(top[i-1][1]+top[i][1])/2;
-        g.quadraticCurveTo(top[i-1][0],top[i-1][1],mx,myy);
+      g.moveTo(pts[0][0],pts[0][1]);
+      for(let i=1;i<pts.length;i++){
+        const mx=(pts[i-1][0]+pts[i][0])/2,myy=(pts[i-1][1]+pts[i][1])/2;
+        g.quadraticCurveTo(pts[i-1][0],pts[i-1][1],mx,myy);
       }
-      for(let i=bot.length-1;i>=0;i--){
-        if(i===bot.length-1){g.lineTo(bot[i][0],bot[i][1]);continue}
-        const mx=(bot[i+1][0]+bot[i][0])/2,myy=(bot[i+1][1]+bot[i][1])/2;
-        g.quadraticCurveTo(bot[i+1][0],bot[i+1][1],mx,myy);
-      }
-      g.closePath();
+      g.lineTo(pts[pts.length-1][0],pts[pts.length-1][1]);
     };
     const grad=g.createLinearGradient(x0,0,x0+pw,0);
-    grad.addColorStop(0,   "hsl(300 92% 64%)");
-    grad.addColorStop(0.25,"hsl(255 92% 66%)");
-    grad.addColorStop(0.5, "hsl(190 92% 62%)");
-    grad.addColorStop(0.75,"hsl(120 85% 58%)");
-    grad.addColorStop(1,   "hsl(45 92% 60%)");
-    g.strokeStyle=grad;g.lineJoin="round";
-    contour();
-    g.globalAlpha=0.10+flash*0.10;g.lineWidth=5;g.stroke();   /* bloom */
-    contour();
-    g.globalAlpha=0.70+flash*0.25;g.lineWidth=1.6;g.stroke(); /* the line */
-
-    /* a faint horizon through the ring sells the distance */
-    g.globalAlpha=0.10+treb*0.20;
-    g.fillStyle="hsl(190 90% 70%)";
-    g.fillRect(x0,my-0.5,pw,1);
+    grad.addColorStop(0,    "hsla(300,92%,64%,0)");
+    grad.addColorStop(0.10, "hsla(300,92%,64%,1)");
+    grad.addColorStop(0.32, "hsla(255,92%,66%,1)");
+    grad.addColorStop(0.52, "hsla(190,92%,62%,1)");
+    grad.addColorStop(0.74, "hsla(120,85%,58%,1)");
+    grad.addColorStop(0.90, "hsla(45,92%,60%,1)");
+    grad.addColorStop(1,    "hsla(45,92%,60%,0)");
+    g.strokeStyle=grad;g.lineJoin="round";g.lineCap="round";
+    trace();
+    g.globalAlpha=0.12+flash*0.14;g.lineWidth=6;g.stroke();   /* bloom */
+    trace();
+    g.globalAlpha=0.75+flash*0.25;g.lineWidth=1.7;g.stroke(); /* the line */
     g.globalAlpha=1;
   }},
   {id:"bars",_pk:null,draw(g,w,h,lv){
