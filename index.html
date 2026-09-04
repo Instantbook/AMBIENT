@@ -220,7 +220,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v31";
+const APP_VERSION="v32";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1404,13 +1404,60 @@ const VIS_STYLES=[
      Deliberately kept off the extreme edges and away from full-white: on
      glasses the frame corners are the first thing to fall outside comfort,
      and a black ground is what keeps the display restful. */
-  {id:"warp",trails:true,_s:null,draw(g,w,h,lv){
+  {id:"warp",trails:true,_s:null,_roll:0,_bAvg:0,_flash:0,_neb:null,_nebT:0,
+   draw(g,w,h,lv){
     const n=lv.length;
-    let bass=0,treb=0,bn=0,tn=0;
+    let bass=0,treb=0,bn=0,tn=0,domI=0,domV=0;
     for(let i=0;i<n;i++){
-      if(i<n*0.20){bass+=lv[i];bn++} else if(i>n*0.55){treb+=lv[i];tn++}
+      const v=lv[i];
+      if(v>domV){domV=v;domI=i}
+      if(i<n*0.20){bass+=v;bn++} else if(i>n*0.55){treb+=v;tn++}
     }
     bass=bn?bass/bn:0;treb=tn?treb/tn:0;
+
+    /* BEAT PUNCH — a transient against a slow running average, not the
+       raw level. Continuous mapping just makes everything wobble; what
+       reads as rhythm is a surge that decays. */
+    this._bAvg=this._bAvg*0.92+bass*0.08;
+    const hit=Math.max(0,bass-this._bAvg*1.25);
+    this._flash=Math.max(this._flash*0.88,Math.min(1,hit*3.2));
+    const flash=this._flash;
+
+    /* NEBULA — three dim blobs tinted by whatever band is loudest, painted
+       once into a small offscreen and blitted. Full-size radial gradients
+       every frame would be the most expensive thing here; a 192px canvas
+       scaled up costs one drawImage and nobody can tell at this blur. */
+    const now=Date.now();
+    if(!this._neb){
+      this._neb=document.createElement("canvas");
+      this._neb.width=this._neb.height=192;
+    }
+    if(now-this._nebT>3500){
+      this._nebT=now;
+      const nc=this._neb.getContext("2d");
+      if(nc){
+        const hue=300-(domI/Math.max(1,n))*260;
+        nc.clearRect(0,0,192,192);
+        for(let b=0;b<3;b++){
+          const bx=40+Math.random()*112,by=40+Math.random()*112,
+                br=50+Math.random()*70;
+          const rg=nc.createRadialGradient(bx,by,0,bx,by,br);
+          rg.addColorStop(0,"hsla("+((hue+b*38)%360)+",85%,58%,0.55)");
+          rg.addColorStop(1,"hsla("+((hue+b*38)%360)+",85%,58%,0)");
+          nc.fillStyle=rg;nc.fillRect(0,0,192,192);
+        }
+      }
+    }
+    /* trails mean a constant blit reaches a steady state ~3x its alpha,
+       so this is deliberately far dimmer than it looks */
+    const dx=Math.sin(now/21000)*w*0.10,dy=Math.cos(now/26000)*h*0.10;
+    g.globalAlpha=0.040+flash*0.030;
+    try{g.drawImage(this._neb,dx-w*0.2,dy-h*0.2,w*1.4,h*1.4)}catch(e){}
+
+    /* ROLL — a slow turn of the whole field. Nothing says "flight" like
+       the stars not being level. */
+    this._roll+=0.00055+bass*0.0011;
+    const cs=Math.cos(this._roll),sn=Math.sin(this._roll);
 
     const N=280;
     if(!this._s||this._s.length!==N){
@@ -1422,8 +1469,8 @@ const VIS_STYLES=[
       });
     }
     const cx=w/2,cy=h/2,k=0.42*Math.min(w,h);
-    /* a floor speed so it drifts when idle, then bass on top */
-    const spd=0.0022+bass*0.0135;
+    /* half the previous pace, plus the beat surge on top */
+    const spd=0.0011+bass*0.0068+flash*0.0075;
     for(let i=0;i<N;i++){
       const s=this._s[i];
       const pz=s.z;
@@ -1432,12 +1479,13 @@ const VIS_STYLES=[
         s.x=Math.random()*2-1;s.y=Math.random()*2-1;s.z=1;s.b=Math.random();
         continue;                     /* no streak across the respawn */
       }
-      const sx=cx+s.x*k/s.z, sy=cy+s.y*k/s.z;
+      const rx=s.x*cs-s.y*sn, ry=s.x*sn+s.y*cs;
+      const sx=cx+rx*k/s.z, sy=cy+ry*k/s.z;
       if(sx<-40||sx>w+40||sy<-40||sy>h+40)continue;
-      const px=cx+s.x*k/pz, py=cy+s.y*k/pz;
+      const px=cx+rx*k/pz, py=cy+ry*k/pz;
       const t=1-s.z;                  /* 0 far, 1 near */
       const lvl=lv[Math.min(n-1,Math.floor(s.b*n))]||0;
-      const col="hsl("+(300-s.b*260)+" 88% "+(58+lvl*32)+"%)";
+      const col="hsl("+(300-s.b*260)+" 88% "+(58+lvl*32+flash*10)+"%)";
       if(t<0.20){
         /* distant stars are a pixel wide anyway - a fill is far cheaper
            than a path+stroke, which is what buys the extra density */
@@ -1451,18 +1499,50 @@ const VIS_STYLES=[
       }
     }
 
-    /* the panel: mirrored about its own centre line so it floats rather
-       than standing on a floor, and held to the middle of the frame */
-    const pw=w*(0.44+bass*0.045),x0=(w-pw)/2,bw=pw/n,my=h*0.5;
-    g.globalAlpha=0.30;             /* reads as distance, not as a wall */
+    /* THE RING — no fill. A single closed contour whose top and bottom
+       edges ride the spectrum, so you see the shape the bars would have
+       made while still seeing the starfield straight through it. Drawn
+       twice: wide and faint for bloom, then thin and bright. */
+    const pw=w*(0.44+bass*0.045),x0=(w-pw)/2,my=h*0.5,step=pw/(n-1||1);
+    const amp=h*0.135*(1+flash*0.22);
+    const top=[],bot=[];
     for(let i=0;i<n;i++){
-      const v=lv[i],bh=Math.max(0.6,v*h*0.135);
-      g.fillStyle="hsl("+(300-(i/n)*260)+" 92% "+(56+v*26)+"%)";
-      g.fillRect(x0+i*bw,my-bh,Math.max(1,bw-0.6),bh*2);
+      /* light smoothing across neighbours — the raw envelope is spiky and
+         a spiky outline reads as noise rather than as a form */
+      const a=lv[i-1]!==undefined?lv[i-1]:lv[i];
+      const b=lv[i+1]!==undefined?lv[i+1]:lv[i];
+      const v=(a+lv[i]*2+b)/4;
+      const y=Math.max(1.5,v*amp);
+      top.push([x0+i*step,my-y]);bot.push([x0+i*step,my+y]);
     }
-    /* a faint horizon through the panel sells the distance */
-    g.globalAlpha=0.12+treb*0.24;
-    g.fillStyle="var(--accent)";
+    const contour=()=>{
+      g.beginPath();
+      g.moveTo(top[0][0],top[0][1]);
+      for(let i=1;i<top.length;i++){
+        const mx=(top[i-1][0]+top[i][0])/2,myy=(top[i-1][1]+top[i][1])/2;
+        g.quadraticCurveTo(top[i-1][0],top[i-1][1],mx,myy);
+      }
+      for(let i=bot.length-1;i>=0;i--){
+        if(i===bot.length-1){g.lineTo(bot[i][0],bot[i][1]);continue}
+        const mx=(bot[i+1][0]+bot[i][0])/2,myy=(bot[i+1][1]+bot[i][1])/2;
+        g.quadraticCurveTo(bot[i+1][0],bot[i+1][1],mx,myy);
+      }
+      g.closePath();
+    };
+    const grad=g.createLinearGradient(x0,0,x0+pw,0);
+    grad.addColorStop(0,   "hsl(300 92% 64%)");
+    grad.addColorStop(0.25,"hsl(255 92% 66%)");
+    grad.addColorStop(0.5, "hsl(190 92% 62%)");
+    grad.addColorStop(0.75,"hsl(120 85% 58%)");
+    grad.addColorStop(1,   "hsl(45 92% 60%)");
+    g.strokeStyle=grad;g.lineJoin="round";
+    contour();
+    g.globalAlpha=0.10+flash*0.10;g.lineWidth=5;g.stroke();   /* bloom */
+    contour();
+    g.globalAlpha=0.70+flash*0.25;g.lineWidth=1.6;g.stroke(); /* the line */
+
+    /* a faint horizon through the ring sells the distance */
+    g.globalAlpha=0.10+treb*0.20;
     g.fillStyle="hsl(190 90% 70%)";
     g.fillRect(x0,my-0.5,pw,1);
     g.globalAlpha=1;
