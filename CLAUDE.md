@@ -51,8 +51,12 @@ has nothing reusable for AMBIENT).
 | Endpoint | State | Needs |
 |---|---|---|
 | `/feeds` | ✅ 12 headlines, BBC + ΤΟ ΒΗΜΑ | `FEEDS` var |
-| `/claude` | ✅ verified end-to-end | `ANTHROPIC_API_KEY` **secret** |
+| `/radio` | ✅ scrapes greek-radio.gr for stream URLs | — |
 | `/ws` | ✅ Durable Objects available on this plan | `ROOMS` binding |
+
+`/claude` was removed: the remote's voice button already reaches Google's assistant and speaks its answer
+into the headset, so a second AI in a tile earned nothing. `ANTHROPIC_API_KEY` is still stored as a secret
+on this Worker and is now inert — delete it whenever.
 
 - **Secrets are per-Worker, not per-account.** The key initially went onto the NOUS Worker and `/claude`
   kept returning `no key configured`.
@@ -65,10 +69,9 @@ has nothing reusable for AMBIENT).
 
 ### Known drift
 
-`SETUP.md` in the repo is a **v6-era document**. It predates the v7 visual language, the v9 bezel layout,
-pinned cards, v10, and the entire v11 LAUNCH card — and it omits the version-bump rule below. The current
-version lives inside `ambient-v11.zip` (and `extracted/SETUP.md`). Read that one; treat the committed
-`SETUP.md` as stale until it's synced.
+`SETUP.md` in the repo is a **v6-era document** and is now many versions behind — it predates the bezel
+layout, the wrapper app, the config file, MUSIC, and the current control scheme. Treat this file as the
+documentation and `SETUP.md` as an artifact until someone rewrites it.
 
 ## Two gotchas that have already caused a production outage
 
@@ -113,9 +116,8 @@ tracking, so nothing AR-shaped is possible by design.
   grid, `clamp()`, custom properties, WebAudio `AnalyserNode`, `speechSynthesis`, service workers,
   `AbortSignal.timeout`) — no polyfills needed.
 - **Sideloading**: `adb install foo.apk` works directly and bypasses the "unknown sources" toggle.
-- **Verified working on hardware**: clock, weather, markets, launch, scenes, system, and **radio audio**
-  (Groove Salad plays, and the visualizer reports `live` — real FFT on a CORS-clean stream). `headlines`
-  and `claude` are blocked only on the Cloudflare Worker not being deployed.
+- **Verified working on hardware**: every card. Radio and local music both play with a real FFT driving the
+  visualiser, headlines and Greek stations come through the deployed Worker, and the companion relay pairs.
 
 ### The cursor problem (why `app/` exists)
 
@@ -133,11 +135,19 @@ browser from a keypress on a focused element, and `route()` has already handled 
 ### The display trap
 
 Physical resolution is **1920×1080 but density is 320**, so Android halves it: a `width=device-width` page
-gets a CSS viewport of **960 × 540**, not 1920 × 1080. This breaks the current bezel layout — at 540px
-tall, `--tile: clamp(118px, 15.2vh, 176px)` pins to its 118px floor, leaving the stage row only ~252px
-while each side rail tries to stack 4 × 118px = 472px of tiles under `overflow:hidden`. **Roughly half the
-left/right tiles get clipped.** Verify against a real screenshot before redesigning — TV browsers sometimes
-force their own desktop viewport, which would change the math.
+gets a CSS viewport of **960 × 540**, not 1920 × 1080. A layout with a fixed number of rail slots therefore
+clipped roughly half the left/right tiles at that height.
+
+Fixed by `frameGeom()`, which derives the tile size *and* the per-edge slot count from the live viewport
+rather than assuming either. Two constraints it encodes and that any redesign must keep:
+
+- **118px is a hard floor, not a preference.** Below it a tile's own contents clip, which trades a visible
+  layout bug for an invisible one.
+- **Slot counts fall out of the space that is left**, so a short viewport gets fewer tiles per rail instead
+  of the same number squeezed under `overflow:hidden`.
+
+Verify against a real screenshot before redesigning — TV browsers sometimes force their own desktop
+viewport, which changes the math entirely.
 
 ## Architecture
 
@@ -146,17 +156,20 @@ force their own desktop viewport, which would change the math.
 Almost everything is a "card" object registered via `registerCards([...])` near the bottom of `index.html`:
 
 - Required: `id`, `pane`, `render(ctx, data)` → HTML string (or DOM Node).
-- Optional: `init(ctx)`, `onKey(ctx, key)` (`"up"|"down"|"left"|"right"|"enter"|"back"` — return `true` to
-  consume), `onText(ctx, str)`, `onInject(ctx, {kind, v})`, `onScene(ctx, config)`, `onTheme(ctx, name)`.
+- Optional: `init(ctx)`, `onKey(ctx, key, held)` (`"up"|"down"|"left"|"right"|"enter"` — return `true` to
+  consume; `held` is the auto-repeat flag), `onBack(ctx)` (return `true` if the card climbed its own
+  hierarchy, `false` to let the shell leave the card), `onToggle(ctx)` (double-press on the tile),
+  `onPick(ctx, i)` (pointer click on row `i`), `onText`, `onInject`, `onScene`, `onTheme`.
 - Optional `renderCompact(ctx, data)` → small HTML for the card's rail/overview tile; cards without it get
   a placeholder dash tile.
 - `sources: [{key, origin, path}]` declares what the card fetches (see Data layer).
 - `pinned: true` cards sit in a fixed frame slot (currently only `clock`), never rotate into the stage, and
-  are immune to scene deactivation.
+  are immune to scene deactivation. `immersive: true` (only `vis`) drops the frame and every label in
+  fullscreen, so black blends into the glasses' unlit surround.
 - Malformed cards are dropped at registration, never fatal to the rest of the app.
 
-Registered cards: `cardClock` (pinned), `cardWeather`, `cardMarkets`, `cardHeadlines`, `cardClaude`,
-`cardRadio`, `cardVis`, `cardLaunch`, `cardScenes`, `cardSystem`.
+Registered cards: `cardClock` (pinned), `cardWeather`, `cardMarkets`, `cardHeadlines`, `cardRadio`,
+`cardMusic`, `cardVis`, `cardLaunch`, `cardScenes`, `cardSystem`.
 
 ### Shell / layout
 
@@ -165,14 +178,8 @@ carousel** — every card holds a permanent slot and the highlight moves, so the
 spatially. State is two independent values: `stageId` (what the main window shows) and `selIdx` (where the
 highlight is), so the highlight can roam without disturbing what's loaded.
 
-Four modes:
-
-| mode | keys |
-|---|---|
-| `bezel` (default) | ◄► walk tiles ccw/cw · OK opens · **OK again on the loaded tile → fullscreen** · BACK overview |
-| `stage` | ▲▼/OK act inside the card · ◄► return to the bezel · BACK bezel |
-| `full` | ▲▼/OK act inside the card · ◄► browse card-to-card in place · BACK bezel |
-| `overview` | arrows select · OK opens · BACK bezel |
+Four modes — `bezel` (default), `stage`, `full`, `overview`. See **Controls** below for what the keys do in
+each; that section is the authority, since the bindings changed once already.
 
 `frameGeom()` derives tile size and per-edge slot counts from the viewport (see "The display trap"), and
 `layoutSlots()` spaces cards evenly around the ring rather than packing them into the first slots —
@@ -201,11 +208,23 @@ transport the `origin:"local"` bridge was stubbed for.
 
 ### Audio bus
 
-One `<audio>` element app-wide (`audioBus`). CORS-clean streams (`cors:true` — the Radio Paradise / SomaFM
-presets) route through an `AudioContext`/`AnalyserNode` for real FFT; everything else (live-fetched Greek
-stations) plays natively, because routing a non-CORS stream through WebAudio would silently **mute** it,
-and `getLevels()` returns synthetic motion instead. The visualizer just calls `ctx.audio.getLevels()` and
-labels itself `live fft` vs `synthetic` from the return value.
+One `<audio>` element app-wide (`audioBus`), shared by RADIO and MUSIC. CORS-clean sources (`cors:true` —
+the SomaFM/Radio Paradise presets and every local track) route through an `AudioContext`/`AnalyserNode` for
+real FFT; everything else plays natively, because routing a non-CORS stream through WebAudio would silently
+**mute** it, and `getLevels()` returns synthetic motion instead.
+
+Three things here were bugs and are load-bearing now:
+
+- **`latencyHint:"playback"`.** The default `"interactive"` asks for a tiny buffer, and on this hardware
+  that produced audible stutter that sounded exactly like a slow network. It is the whole fix.
+- **The analyser's top bins are dead.** They carry almost no energy at any real sample rate, so a band
+  layout that spans the full array leaves the right of the visualiser permanently high. Bands stop at 78%
+  and deflect against a *local* moving average, not the global mean.
+- **"Something is playing" is not "my source is playing."** One bus serving two cards means each tile must
+  check that the current URL is one of *its own* before claiming it, or RADIO announces MUSIC's track.
+
+`duration()` returns 0 for a live stream (whose real value is `Infinity`), which is also the test
+`seekable()` uses to decide whether ◄► scrub or do something else.
 
 ### Themes, scenes, companion
 
@@ -218,75 +237,114 @@ The glasses generate a 5-char room code and connect to the Worker's `/ws?room=CO
 (`class Room`) that blindly broadcasts to the other sockets. Phone message shapes: `{t:"key",k}` (drives
 the same `route()`), `{t:"text",v}` (→ staged card's `onText`), `{t:"action",id}` (`scene.*`, `theme.*`,
 `stage.<cardId>`), `{t:"inject",kind,v,target?}` (→ named card, or any card whose `accepts` lists that
-kind; `chat`→`cardClaude`, `url`→`cardLaunch`). **The room code is pairing convenience, not
+kind; `url`→`cardLaunch`). **The room code is pairing convenience, not
 authentication** — the Worker's `ALLOW_ORIGIN` var is the actual lock and must be set to the Pages origin.
 
-The same Worker proxies `/claude` (holds `ANTHROPIC_API_KEY` as a Worker secret; never client-side) and
-`/feeds` (server-side RSS fetch + regex parse, keeping the client CORS-clean). The `wrangler.toml`
-template is in the comment block at the bottom of `ambient-worker.js`.
+The relay is also the reliable way to drive the device from this machine: `{t:"key",k}` lands in `route()`
+exactly as a real keypress does, where `adb shell input tap` misses the right-hand tiles.
 
-## Where things stand (2026-09-03)
+The same Worker serves `/feeds` and `/radio` — server-side fetch and parse, keeping the client CORS-clean.
+The `wrangler.toml` template is in the comment block at the bottom of `ambient-worker.js`.
 
-Running **v25** on the device inside the `app/` wrapper, Worker configured. Everything on the roadmap is
-now verified on hardware.
+## Installing the app (two grants, or it degrades quietly)
 
-**Working, confirmed on the device:** D-pad tile navigation (spatial) · OK opens · OK-again fullscreen ·
-clock · weather · markets · headlines (12, two sources) · **CLAUDE asked and answered on the glasses, and
-the reply is audible** — `speechSynthesis` does work in this WebView · **Greek radio playing with the real
-FFT visualiser** · scenes · launch · system · **the phone companion relay, driven end-to-end**.
-
-### The radio fix was a better source, not a proxy
-
-The planned Worker audio proxy turned out to be unnecessary. radio-browser.info returns Greek stations on
-their **http** hostnames, which Chromium blocks as mixed content on an https page; greek-radio.gr lists the
-same stations on their **https** hostnames (`http://netradio.live24.gr/realfm` →
-`https://realfm.live24.gr/realfm`). Those hosts also send `Access-Control-Allow-Origin`, so the stations
-are `cors:true` and drive the real analyser rather than the synthetic fallback.
-
-`GET /radio` parses the site's `data-stream-url` cards into `{label,url,city,meta,logo,link}` — 24 stations
-across Αθήνα, Θεσσαλονίκη, Πάτρα, Χαλκίδα, Ηράκλειο, Μυτιλήνη. `?path=` browses the site's own taxonomy
-(`genre/ambient`, `crete/chania`, `central-macedonia/thessaloniki`), validated against a strict pattern so
-it can only ever walk that host. **`?path=` is implemented and deployed but no card uses it yet** — that's
-the obvious next feature, along with a favourites list.
-
-### Testing the companion without a phone
-
-The relay can be driven from this machine, which is how it was verified — no phone needed:
-
-```js
-const ws = new WebSocket("wss://ambient-worker.dbazos1.workers.dev/ws?room=<ROOM>&role=remote");
-ws.onopen = () => ws.send(JSON.stringify({t:"action", id:"stage.weather"}));
-// also: {t:"key",k:"down"} · {t:"text",v:"..."} · {t:"inject",kind:"chat",v:"..."}
-```
-
-The room code is in the SYSTEM card and the stage header (`LINK xxxxx`), and **changes on every
-`pm clear`**. To pair a real phone: open `https://instantbook.github.io/AMBIENT/companion.html`, enter the
-room code and the Worker URL once.
-
-### Still open
-
-- No card browses `/radio?path=` yet (genre/city listings), and there are no favourites.
-- `adb shell input tap` is unreliable on the right-hand tiles; arrow-key navigation is the dependable way
-  to drive the device from a script.
-- The `MIXED_CONTENT_COMPATIBILITY_MODE` line in the wrapper is now moot for radio and was never confirmed
-  to do anything. Harmless, but don't treat it as load-bearing.
-
-### Provisioning the device after a wipe
-
-`pm clear` wipes localStorage — room code, scenes, bookmarks and the **Worker URL** all reset, so this is
-needed after every forced update:
+**After every `adb install`, run both of these.** Neither failure is loud, which
+is exactly why they need writing down:
 
 ```
-adb shell am start -n io.github.instantbook.ambient/.MainActivity
-adb shell input tap 142 672          # SYSTEM tile (left rail)
-adb shell input keyevent KEYCODE_DPAD_DOWN   # ▼ focuses the relay field
-adb shell input text "https://ambient-worker.dbazos1.workers.dev"
-adb shell input keyevent KEYCODE_ENTER
-adb shell input keyevent KEYCODE_BACK
+adb install -r /tmp/ambient-apk-build/ambient.apk
+adb shell appops set io.github.instantbook.ambient MANAGE_EXTERNAL_STORAGE allow
+adb shell pm grant io.github.instantbook.ambient android.permission.READ_EXTERNAL_STORAGE
 ```
 
-Screenshots: `adb shell screencap -p /sdcard/x.png` then `adb pull` — never pipe `exec-out` through a
-PowerShell `>` redirect, it corrupts the PNG with a BOM.
+- **Without the first**, settings fall back from `/storage/emulated/0/AMBIENT/config.json`
+  to the app's own external directory — which works, but *is* wiped with the app,
+  so every customisation silently becomes disposable again.
+- **Without the second**, MUSIC finds nothing at all. It reads the library through
+  MediaStore, which needs it.
+
+Rebuild first with `bash app/build.sh`; the APK lands in a temp dir outside Dropbox.
+A signing-key change requires `adb uninstall` first, and that wipes app data (though
+no longer the settings file).
+
+## Controls
+
+The scheme, and the reasoning, since it went through several wrong versions:
+
+| | ▲▼ | ◄► | OK | BACK |
+|---|---|---|---|---|
+| **Bezel** | move between tiles (spatial) | move between tiles | open card · again = fullscreen | overview |
+| **A card** | choose a row | **seek ∓10s, ∓3s per repeat while held** — when there is a timeline | act on the row | **up one level** |
+| **RADIO** | choose | **► stars** — a live stream has no timeline | play/stop | back to tiles |
+| **MUSIC** | choose | seek | play / descend | track → album → artist → tiles |
+| **Fullscreen** | as the card | as the card | card action | leave fullscreen |
+| **Overview** | move | move | open | bezel |
+
+Principles worth keeping:
+
+- **BACK is "up one level", not "leave".** That is what frees ◄► for transport. A card
+  with a hierarchy climbs it via `onBack()` and only hands BACK to the shell at its
+  top, so there is always an exit and never a trap.
+- **◄► do what the medium allows.** Seekable audio gets scrubbing; a live stream
+  reports `Infinity` for duration and gets starring instead. Inventing a timeline for
+  a stream would be a lie.
+- **Fullscreen no longer cycles cards with ◄►.** Nobody flips between fullscreen
+  weather and fullscreen markets; the keys are worth more as transport.
+- **Hold = `e.repeat`.** Android sends auto-repeat keydowns, so press-and-hold needs
+  no timers and stops the instant the key is released.
+- **The staged card gets first refusal on every key except BACK.** Handling ◄► in the
+  shell first was a real bug: RADIO's ► could never reach the card.
+- **Double-press a tile** runs `onToggle()` — play/stop for RADIO and MUSIC, fullscreen
+  for the visualiser. Only cards that define it pay the 260ms disambiguation delay.
+
+## Settings live in a file
+
+`/storage/emulated/0/AMBIENT/config.json`, pretty-printed and MTP-visible so it can be
+edited from a computer. localStorage stays the fast working store; the file is the
+durable copy — it survives `pm clear` and uninstall, which localStorage does not.
+
+- Mirrored keys are listed in `CFG_KEYS`; adding a setting is one entry.
+- **`loadConfig()` must run before anything reads localStorage.** Module-level
+  initialisers (`themeName`, the companion room code) take their defaults the moment
+  the script parses, so loading any later restores nothing — that bug looked exactly
+  like the file not being read.
+- The write location is *probed*, not predicted: `canWrite()` on a volume root said the
+  microSD was writable when it was not. `writeConfig` walks candidates and keeps
+  whichever accepts the file.
+
+## Local media
+
+**An ordinary app cannot read a removable volume at all** — not even with All-files
+access granted. Direct filesystem scanning found a card full of music completely empty
+while a track copied to internal storage appeared instantly. Do not retry that approach.
+
+MUSIC therefore reads **MediaStore**, which indexes every volume, needs only
+`READ_EXTERNAL_STORAGE`, and returns real tags (title/artist/album) instead of
+filenames. Playback streams by `content://` id through an https URL the app intercepts
+itself (`https://ambient.local/media?id=…`), because an https page cannot load `file://`
+and a plain-http helper would be blocked as mixed content — the same wall the Greek
+radio stations hit. The response carries CORS headers, so **local tracks drive the real
+FFT visualiser**. Range requests return a genuine 206, so seeking works.
+
+Browsing is artist → album → track; an artist with one album skips the album level in
+both directions.
+
+## Where things stand
+
+### Provisioning after a wipe
+
+Mostly automatic now. The Worker URL is compiled into the APK from `app/worker.url`
+(gitignored, so it is never published) and injected on load, and everything else is
+restored from `config.json`. A wipe costs nothing but the two permission grants above.
+
+Screenshots: `adb shell screencap -p /sdcard/x.png` then `adb pull` — never pipe
+`adb exec-out screencap -p` through a PowerShell `>` redirect, it corrupts the PNG with
+a BOM. `adb shell input tap` is unreliable on the right-hand tiles; drive the device
+with arrow keys, or over the companion relay (below), which is deterministic.
+
+**Check before driving the device.** If the user is using it, scripted keypresses and
+`am force-stop` land on top of whatever they are doing — and their keypresses will look
+like your results.
 
 ### The assistant button
 
