@@ -65,11 +65,13 @@ public class MainActivity extends Activity {
      *  the endpoint never lands in the public repo. Empty when unset. */
     private static final String WORKER_URL = BuildLocal.WORKER;
 
-    /** Two BACK presses inside this window quit, so the app is never a trap. */
+    /** A quick second BACK returns to AMBIENT from a launched site. It is
+     *  deliberately NOT an exit gesture any more - see onKeyDown. */
     private static final long EXIT_WINDOW_MS = 2000L;
 
     private WebView web;
     private long lastBackAt = 0L;
+    private boolean backWasLong = false;
 
     /**
      * Bridge for the things a web page cannot see: the device's memory and
@@ -550,21 +552,58 @@ public class MainActivity extends Activity {
      * BACK means two different things depending on where you are, and
      * getting that wrong stranded people.
      *
-     * On AMBIENT it is a navigation key - leave fullscreen, open the
-     * overview - but Android delivers it to the Activity, not the page, so
-     * it is forwarded as an Escape keydown. Two presses quit.
+     * On AMBIENT it is a navigation key - up one level, leave fullscreen,
+     * open the overview - but Android delivers it to the Activity, not the
+     * page, so it is forwarded as an Escape keydown.
      *
      * On a site opened by the LAUNCH card it has to behave like a browser.
      * Overriding onKeyDown had shadowed onBackPressed entirely, so BACK sent
      * an Escape that Wikipedia ignored and a second press quit the app:
      * there was no way back to the dashboard at all. Now it walks history,
      * falls back to AMBIENT when history runs out, and a double press jumps
-     * straight home however deep you have browsed. Quitting is only possible
-     * from AMBIENT itself, so a launched site can never be a dead end.
+     * straight home however deep you have browsed, so a launched site can
+     * never be a dead end.
+     *
+     * The work happens on key UP. A long press has to be able to mean
+     * something different from a short one, and Android only offers that
+     * through startTracking()/onKeyLongPress, which requires the down event
+     * to be claimed and the decision deferred until the key is released.
      */
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.getRepeatCount() == 0) {
+                event.startTracking();
+                backWasLong = false;
+            }
+            return true;
+        }
+        // Everything else - DPAD_LEFT/RIGHT/UP/DOWN, DPAD_CENTER - falls
+        // through to the WebView, which turns it into the arrow and Enter
+        // key events the cockpit shell listens for.
+        return super.onKeyDown(keyCode, event);
+    }
+
+    /** Hold BACK to leave AMBIENT. A hold cannot be produced by navigating,
+     *  which is the whole point: the exit gesture and the navigation keys
+     *  can no longer be mistaken for one another. */
+    @Override
+    public boolean onKeyLongPress(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            backWasLong = true;
+            finish();
+            return true;
+        }
+        return super.onKeyLongPress(keyCode, event);
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (backWasLong) {          // already handled by the long press
+                backWasLong = false;
+                return true;
+            }
             long now = System.currentTimeMillis();
             boolean quick = now - lastBackAt < EXIT_WINDOW_MS;
             lastBackAt = now;
@@ -582,21 +621,23 @@ public class MainActivity extends Activity {
                 return true;
             }
 
-            if (quick) {
-                finish();
-                return true;
-            }
+            /* At AMBIENT, BACK belongs to the page, every time.
+             *
+             * It used to quit on a second press inside EXIT_WINDOW_MS, which
+             * was fine while BACK only ever meant "leave". Once the cockpit
+             * made BACK mean "up one level", the two collided: walking out of
+             * MUSIC is track -> album -> tiles, two presses well inside two
+             * seconds, so climbing back out of a hierarchy quit the app.
+             *
+             * Exit is a LONG press now (handled in onKeyLongPress). A hold
+             * cannot be produced by navigating, so the gesture and the
+             * navigation can no longer be confused for one another. */
             web.evaluateJavascript(
                     "window.dispatchEvent(new KeyboardEvent('keydown',"
                             + "{key:'Escape',bubbles:true}));", null);
-            Toast.makeText(this, "Press BACK again to exit AMBIENT",
-                    Toast.LENGTH_SHORT).show();
             return true;
         }
-        // Everything else - DPAD_LEFT/RIGHT/UP/DOWN, DPAD_CENTER - falls
-        // through to the WebView, which turns it into the arrow and Enter
-        // key events the cockpit shell listens for.
-        return super.onKeyDown(keyCode, event);
+        return super.onKeyUp(keyCode, event);
     }
 
     @Override
