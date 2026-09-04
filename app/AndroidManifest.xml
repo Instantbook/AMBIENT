@@ -6,6 +6,13 @@
 
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+  <!-- Settings live in a plain JSON file on the microSD so they survive a
+       pm clear and can be edited from a computer over MTP. Scoped storage
+       blocks arbitrary paths without this; grant it with
+         adb shell appops set io.github.instantbook.ambient              MANAGE_EXTERNAL_STORAGE allow
+       Without it the app falls back to its own external directory, which
+       works but is wiped with the app. -->
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
 
   <!-- A Google TV box has neither, and requiring them would hide the app -->
   <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>

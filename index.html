@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v39";
+const APP_VERSION="v40";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -249,7 +249,7 @@ function applyTheme(name){
   const t=THEMES[name];
   document.documentElement.style.setProperty("--accent",t.accent);
   document.documentElement.style.setProperty("--accent-soft",t.soft);
-  localStorage.setItem("ambient.theme",name);
+  localStorage.setItem("ambient.theme",name);persist();
   CARDS.forEach(c=>{try{c.onTheme&&c.onTheme(ctxFor(c),name)}catch(e){}});
 }
 
@@ -408,7 +408,7 @@ let currentScene=localStorage.getItem("ambient.scene")||"all";
 function applyScene(sc){
   if(!sc)return;
   currentScene=sc.id;
-  localStorage.setItem("ambient.scene",sc.id);
+  localStorage.setItem("ambient.scene",sc.id);persist();
   applyTheme(sc.palette||"day-cyan");
   CARDS.forEach(c=>{
     const cfg=(sc.cards&&sc.cards[c.id])||{};
@@ -455,7 +455,7 @@ const companion=(()=>{
   let code=localStorage.getItem("ambient.room");
   if(!code){code=Array.from({length:5},()=>
     "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random()*31)])
-    .join("");localStorage.setItem("ambient.room",code)}
+    .join("");localStorage.setItem("ambient.room",code);}
   function setState(v){state=v;
     const el=document.getElementById("st-link");
     if(el)el.textContent=v==="on"?"LINK "+code:"";
@@ -553,7 +553,7 @@ function ctxFor(card){
         "ambient.card."+card.id+"."+k);
         return v===null?dflt:JSON.parse(v)}catch(e){return dflt}},
       set:(k,v)=>{try{localStorage.setItem(
-        "ambient.card."+card.id+"."+k,JSON.stringify(v))}catch(e){}}
+        "ambient.card."+card.id+"."+k,JSON.stringify(v));persist()}catch(e){}}
     },
     emit,on,
     rerender:()=>renderCard(card)
@@ -1900,6 +1900,7 @@ const cardSystem={
     document.addEventListener("change",e=>{
       if(e.target&&e.target.id==="worker-in"){
         localStorage.setItem("ambient.worker",e.target.value.trim());
+        persist();
         CARDS.forEach(c=>refreshCard(c,true));
         /* refreshCard returns early for cards with no sources, so LAUNCH
            kept showing stale state after the URL was set.
@@ -1912,12 +1913,60 @@ const cardSystem={
 };
 
 /* ---------------- boot ---------------- */
-/* The wrapper app compiles the Worker URL in (from app/worker.url, which is
-   gitignored) and hands it over here, so a wiped localStorage no longer means
-   retyping it on a TV keyboard. A value already set by hand always wins. */
+/* ---------------- durable settings ----------------
+   localStorage is the wrong home for anything the user typed: `pm clear`
+   wipes it, uninstalling wipes it, and it cannot be read or edited from a
+   computer. When the wrapper app is present, the same values are mirrored
+   to a plain JSON file on the microSD (/AMBIENT/config.json, alongside the
+   media folders), so bookmarks and preferences survive a wipe and can be
+   edited over MTP. localStorage stays the working store - synchronous and
+   fast - and the file is the durable copy.
+
+   Only user intent is mirrored. The SWR data cache (ambient.data.*) is
+   derived and would just churn the card. */
+const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
+  "ambient.scenes","ambient.room",
+  "ambient.card.launch.links","ambient.card.vis.style"];
+const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
+
+function loadConfig(){
+  if(!hostBridge||!hostBridge.readConfig)return;
+  let cfg=null;
+  try{const raw=hostBridge.readConfig();if(raw)cfg=JSON.parse(raw)}catch(e){}
+  if(!cfg||typeof cfg!=="object")return;
+  /* the file is the durable copy, so on a fresh install it seeds
+     localStorage; anything already set on THIS device wins, because it is
+     what the person most recently chose here */
+  CFG_KEYS.forEach(k=>{
+    if(cfg[k]===undefined||localStorage.getItem(k)!==null)return;
+    try{localStorage.setItem(k,cfg[k])}catch(e){}
+  });
+}
+let _cfgT=null;
+function persist(){
+  if(!hostBridge||!hostBridge.writeConfig)return;
+  clearTimeout(_cfgT);
+  /* debounced: a burst of changes (applying a scene touches several keys)
+     should be one write, not five */
+  _cfgT=setTimeout(()=>{
+    const out={_note:"AMBIENT settings. Edit freely; the app reads this on "+
+      "start. Values are the raw localStorage strings.",
+      _saved:new Date().toISOString()};
+    CFG_KEYS.forEach(k=>{
+      const v=localStorage.getItem(k);
+      if(v!==null)out[k]=v;
+    });
+    try{hostBridge.writeConfig(JSON.stringify(out,null,2))}catch(e){}
+  },1200);
+}
+
+/* The wrapper also compiles the Worker URL in (from app/worker.url, which is
+   gitignored), so a wiped localStorage no longer means retyping it on a TV
+   keyboard. A value already set by hand always wins. */
+loadConfig();
 try{
-  if(window.AmbientHost&&AmbientHost.worker){
-    const u=(AmbientHost.worker()||"").trim();
+  if(hostBridge&&hostBridge.worker){
+    const u=(hostBridge.worker()||"").trim();
     if(u&&!localStorage.getItem("ambient.worker"))
       localStorage.setItem("ambient.worker",u);
   }

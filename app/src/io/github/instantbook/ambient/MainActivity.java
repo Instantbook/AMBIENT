@@ -5,9 +5,13 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Process;
 import android.os.SystemClock;
 import android.webkit.JavascriptInterface;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.RandomAccessFile;
 import android.webkit.WebResourceRequest;
 import android.view.KeyEvent;
 import android.view.View;
@@ -67,6 +71,48 @@ public class MainActivity extends Activity {
         public String worker() { return atAmbient ? WORKER_URL : ""; }
 
         @JavascriptInterface
+        public String configPath() {
+            return atAmbient ? configFile().getAbsolutePath() : "";
+        }
+
+        /** "" when there is no file yet - the page then keeps its defaults. */
+        @JavascriptInterface
+        public String readConfig() {
+            if (!atAmbient) return "";
+            RandomAccessFile f = null;
+            try {
+                File c = configFile();
+                if (!c.exists() || c.length() > 1 << 20) return "";
+                f = new RandomAccessFile(c, "r");
+                byte[] b = new byte[(int) c.length()];
+                f.readFully(b);
+                return new String(b, "UTF-8");
+            } catch (Throwable t) {
+                return "";
+            } finally {
+                try { if (f != null) f.close(); } catch (Throwable ignored) {}
+            }
+        }
+
+        @JavascriptInterface
+        public boolean writeConfig(String json) {
+            if (!atAmbient || json == null) return false;
+            FileOutputStream o = null;
+            try {
+                File c = configFile();
+                File dir = c.getParentFile();
+                if (dir != null && !dir.exists() && !dir.mkdirs()) return false;
+                o = new FileOutputStream(c);
+                o.write(json.getBytes("UTF-8"));
+                return true;
+            } catch (Throwable t) {
+                return false;
+            } finally {
+                try { if (o != null) o.close(); } catch (Throwable ignored) {}
+            }
+        }
+
+        @JavascriptInterface
         public String stats() {
             if (!atAmbient) return "{}";   // youtube.com does not get this
             long totalKb = 0, availKb = 0;
@@ -100,6 +146,41 @@ public class MainActivity extends Activity {
                  + ",\"cores\":" + Runtime.getRuntime().availableProcessors()
                  + ",\"model\":\"" + Build.MODEL.replace("\"", "") + "\"}";
         }
+    }
+
+    /**
+     * Where settings actually live.
+     *
+     * localStorage is the wrong home for anything the user typed: `pm clear`
+     * wipes it, uninstalling wipes it, and it cannot be read or edited from
+     * a computer. This writes a plain JSON file to the microSD instead -
+     * /AMBIENT/config.json, alongside the media folders - so bookmarks and
+     * preferences survive a wipe and can be edited over MTP.
+     *
+     * Falls back to the app's own external directory when All-files access
+     * has not been granted. That still works, but it is inside
+     * Android/data and IS cleared with the app, so the card reports which
+     * of the two is in use rather than quietly degrading.
+     */
+    private File configFile() {
+        File base = null;
+        boolean allFiles = Build.VERSION.SDK_INT < 30
+                || Environment.isExternalStorageManager();
+        if (allFiles) {
+            File[] vols = new File("/storage").listFiles();
+            if (vols != null) {
+                for (File v : vols) {
+                    String n = v.getName();
+                    // skip the emulated internal volume and the self symlink:
+                    // what is left is the removable card, if one is present
+                    if ("emulated".equals(n) || "self".equals(n)) continue;
+                    if (v.isDirectory() && v.canWrite()) { base = v; break; }
+                }
+            }
+            if (base == null) base = new File("/storage/emulated/0");
+            return new File(new File(base, "AMBIENT"), "config.json");
+        }
+        return new File(getExternalFilesDir(null), "config.json");
     }
 
     private final Host host = new Host();

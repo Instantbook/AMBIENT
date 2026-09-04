@@ -1,5 +1,5 @@
 /* AMBIENT service worker — cache the shell, network-first for data */
-const CACHE="ambient-v39";
+const CACHE="ambient-v40";
 const SHELL=["./","./index.html","./companion.html","./manifest.json","./icon.png"];
 
 self.addEventListener("install",e=>{
