@@ -220,7 +220,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v27";
+const APP_VERSION="v28";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -272,7 +272,11 @@ const audioBus=(()=>{
       ac=new (window.AudioContext||window.webkitAudioContext)(
         {latencyHint:"playback"});
       const src=ac.createMediaElementSource(el);
-      analyser=ac.createAnalyser();analyser.fftSize=128;
+      analyser=ac.createAnalyser();
+      /* 128 gave only 64 bins - far too coarse once the bars got
+         narrow. 1024 yields 512, and smoothing rides out the jitter
+         that finer bins expose. */
+      analyser.fftSize=1024;analyser.smoothingTimeConstant=0.75;
       src.connect(analyser);analyser.connect(ac.destination);
       wired=true;
     }catch(e){analyser=null}
@@ -313,9 +317,20 @@ const audioBus=(()=>{
             bins=new Uint8Array(analyser.frequencyBinCount);
           const raw=bins;
           analyser.getByteFrequencyData(raw);
+          /* Log-spaced bands. A linear bin->bar map crams almost all
+             musical energy into the first few bars and leaves the rest
+             of the display dead; each bar now covers an exponentially
+             wider slice, which is what makes a spectrum look "right".
+             Peak (not mean) across the slice keeps it lively. */
+          const n=arr.length,len=raw.length;
           let sum=0;
-          for(let i=0;i<arr.length;i++){
-            const v=(raw[Math.floor(i*raw.length/arr.length)]||0)/255;
+          for(let i=0;i<n;i++){
+            const lo=Math.floor(Math.pow(len,i/n));
+            const hi=Math.min(len,Math.max(lo+1,
+              Math.floor(Math.pow(len,(i+1)/n))));
+            let mx=0;
+            for(let j=lo;j<hi;j++)if(raw[j]>mx)mx=raw[j];
+            const v=mx/255;
             arr[i]=v;sum+=v;
           }
           if(sum>0.01)return true; /* real signal present */
@@ -323,10 +338,17 @@ const audioBus=(()=>{
       }
       /* synthetic: gentle breathing when playing, near-still when idle */
       synthT+=0.045;
-      const amp=this.playing()?0.55:0.12;
-      for(let i=0;i<arr.length;i++)
-        arr[i]=amp*(0.35+0.65*Math.abs(Math.sin(synthT+i*0.55))*
-          (0.6+0.4*Math.sin(synthT*0.31+i)));
+      const amp=this.playing()?0.55:0.12,m=arr.length;
+      for(let i=0;i<m;i++){
+        const x=i/m;                       /* position, not bin index, so
+                                              this reads the same at any
+                                              bar count */
+        arr[i]=amp*(0.30+0.70*
+          Math.abs(Math.sin(synthT*1.7+x*7.5))*
+          (0.55+0.45*Math.sin(synthT*0.5+x*2.1)))*
+          (1-0.45*x);                      /* gentle high-end rolloff, the
+                                              shape real music has */
+      }
       return false;
     }
   };
@@ -1366,15 +1388,27 @@ const cardRadio={
    Style registry mirrors the whole system's philosophy (§8):
    each style = {id,draw(ctx2d,w,h,levels,accent)}. OK cycles.  */
 const VIS_STYLES=[
-  {id:"bars",draw(g,w,h,lv){
+  {id:"bars",_pk:null,draw(g,w,h,lv){
     /* frequency → hue: low=magenta through cyan to high=amber */
     const n=lv.length,bw=w/n;
+    const bar=Math.max(1,bw-1);          /* 1px gutter, however many bars */
+    /* peak caps that fall slowly — the thing that makes a spectrum read as
+       an instrument rather than a bar chart */
+    if(!this._pk||this._pk.length!==n)this._pk=new Float32Array(n);
+    const pk=this._pk;
     for(let i=0;i<n;i++){
-      const bh=Math.max(2,lv[i]*h*0.9);
+      const v=lv[i];
+      if(v>pk[i])pk[i]=v; else pk[i]=Math.max(v,pk[i]-0.014);
       const hue=300-(i/n)*260;
-      g.fillStyle="hsl("+hue+" 85% "+(45+lv[i]*25)+"%)";
-      g.globalAlpha=0.4+0.6*lv[i];
-      g.fillRect(i*bw+1,h-bh,bw-2,bh);
+      const bh=Math.max(1,v*h*0.92);
+      g.globalAlpha=0.35+0.65*v;
+      g.fillStyle="hsl("+hue+" 88% "+(46+v*26)+"%)";
+      g.fillRect(i*bw,h-bh,bar,bh);
+      if(pk[i]>0.02){
+        g.globalAlpha=0.9;
+        g.fillStyle="hsl("+hue+" 95% 74%)";
+        g.fillRect(i*bw,h-Math.max(2,pk[i]*h*0.92),bar,1.5);
+      }
     }
     g.globalAlpha=1;
   }},
@@ -1434,6 +1468,11 @@ const cardVis={
     const w=cv.clientWidth||600,h=cv.clientHeight||220;
     if(cv.width!==w)cv.width=w;
     if(cv.height!==h)cv.height=h;
+    /* Bar count follows the canvas instead of a fixed 32: roughly one bar
+       per 5px, so the stage gets ~130 narrow bars and the fullscreen view
+       more still, rather than 32 fat ones stretched to fit. */
+    const want=Math.max(24,Math.min(192,Math.round(w/5)));
+    if(this._levels.length!==want)this._levels=new Float32Array(want);
     g.clearRect(0,0,w,h);
     const real=ctx.audio.getLevels(this._levels);
     VIS_STYLES[this.styleIdx].draw(g,w,h,this._levels);
