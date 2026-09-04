@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v45";
+const APP_VERSION="v46";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1874,10 +1874,10 @@ const cardMusic={
   },
   _list(){return Array.isArray(this._tracks)?this._tracks:[]},
   _item(t){
-    /* strip the extension for display, keep the folder as the album line */
-    const label=String(t.name||"").replace(/\.[a-z0-9]+$/i,"");
+    /* MediaStore gives real tags, so no filename cleanup is needed and the
+       right-hand column can carry the artist */
     let base="";try{base=hostBridge.mediaBase()}catch(e){}
-    return{label,url:base+"?p="+encodeURIComponent(t.path),
+    return{label:String(t.name||"track"),url:base+"?id="+t.id,
       cors:true,region:t.dir||""};
   },
   render(ctx){
@@ -1888,9 +1888,9 @@ const cardMusic={
         "or internal storage.</div>";
     const list=this._list();
     if(!list.length)
-      return "<div class='state'>No audio found. Looked in <span class='val'>"+
-        "Music/</span> and <span class='val'>AMBIENT/music/</span> on every "+
-        "volume.<br><br>OK rescans.</div>";
+      return "<div class='state'>No audio in the media library yet. Music "+
+        "anywhere on internal storage or the card is picked up once Android "+
+        "has indexed it.<br><br>OK rescans.</div>";
     const cur=ctx.audio.current();
     return list.map((t,i)=>{
       const it=this._item(t);

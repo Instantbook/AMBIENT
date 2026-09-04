@@ -13,6 +13,14 @@
        Without it the app falls back to its own external directory, which
        works but is wiped with the app. -->
   <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+  <!-- MUSIC reads the library through MediaStore, which is the only way to
+       see a removable card: direct file access to /storage/<uuid> is denied
+       to an ordinary app even with All-files granted. Grant with
+         adb shell pm grant io.github.instantbook.ambient \
+             android.permission.READ_EXTERNAL_STORAGE -->
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+      android:maxSdkVersion="32"/>
+  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
 
   <!-- A Google TV box has neither, and requiring them would hide the app -->
   <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>

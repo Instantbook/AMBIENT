@@ -8,6 +8,10 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Process;
 import android.os.SystemClock;
+import android.content.ContentUris;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.MediaStore;
 import android.webkit.CookieManager;
 import android.webkit.MimeTypeMap;
 import android.webkit.WebResourceResponse;
@@ -87,23 +91,51 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String worker() { return atAmbient ? WORKER_URL : ""; }
 
-        /** [{name,dir,path,size}] - dir is the album folder, for grouping. */
+        /**
+         * [{id,name,dir}] from MediaStore.
+         *
+         * Walking the filesystem directly could not see the microSD at all -
+         * an ordinary app gets no read access to a removable volume even with
+         * All-files granted, so a card full of music looked empty. MediaStore
+         * indexes every volume, needs only READ_EXTERNAL_STORAGE, and hands
+         * back real tags, so tracks show as "Learning To Fly / Pink Floyd"
+         * rather than 02_Pink_Floyd_-_Learning_To_Fly_(A_Momentary...).mp3.
+         */
         @JavascriptInterface
         public String listMedia() {
             if (!atAmbient) return "[]";
-            java.util.List<File> found = new java.util.ArrayList<File>();
-            for (File r : mediaRoots()) scan(r, 0, found);
             StringBuilder b = new StringBuilder("[");
-            boolean first = true;
-            for (File f : found) {
-                if (!first) b.append(",");
-                first = false;
-                String parent = f.getParentFile() != null
-                        ? f.getParentFile().getName() : "";
-                b.append("{\"name\":\"").append(jesc(f.getName()))
-                 .append("\",\"dir\":\"").append(jesc(parent))
-                 .append("\",\"path\":\"").append(jesc(f.getAbsolutePath()))
-                 .append("\",\"size\":").append(f.length()).append("}");
+            Cursor c = null;
+            try {
+                Uri uri = MediaStore.Audio.Media.getContentUri("external");
+                c = getContentResolver().query(uri, new String[]{
+                        MediaStore.Audio.Media._ID,
+                        MediaStore.Audio.Media.TITLE,
+                        MediaStore.Audio.Media.ARTIST,
+                        MediaStore.Audio.Media.ALBUM},
+                        MediaStore.Audio.Media.IS_MUSIC + "!=0", null,
+                        MediaStore.Audio.Media.ARTIST + "," +
+                        MediaStore.Audio.Media.ALBUM + "," +
+                        MediaStore.Audio.Media.TRACK);
+                boolean first = true;
+                int n = 0;
+                while (c != null && c.moveToNext() && n < 500) {
+                    n++;
+                    if (!first) b.append(",");
+                    first = false;
+                    String artist = c.getString(2);
+                    if (artist == null || "<unknown>".equals(artist))
+                        artist = c.getString(3);
+                    b.append("{\"id\":").append(c.getLong(0))
+                     .append(",\"name\":\"").append(jesc(String.valueOf(c.getString(1))))
+                     .append("\",\"dir\":\"").append(jesc(artist == null ? "" : artist))
+                     .append("\"}");
+                }
+            } catch (Throwable t) {
+                // permission missing or provider unavailable - report nothing
+                // rather than a half list, and let the card explain itself
+            } finally {
+                try { if (c != null) c.close(); } catch (Throwable ignored) {}
             }
             return b.append("]").toString();
         }
@@ -292,7 +324,8 @@ public class MainActivity extends Activity {
         if (n.endsWith(".ogg") || n.endsWith(".oga") || n.endsWith(".opus"))
             return "audio/ogg";
         if (n.endsWith(".wav")) return "audio/wav";
-        return "application/octet-stream";
+        // content:// URIs carry no extension; the decoder sniffs anyway
+        return "audio/mpeg";
     }
 
     /** Depth 5: tracks on this device sit at Music/<artist>/<album>/file. */
@@ -325,15 +358,30 @@ public class MainActivity extends Activity {
 
     private WebResourceResponse serveMedia(String url, String rangeHeader) {
         try {
-            int q = url.indexOf("?p=");
+            int q = url.indexOf("?id=");
             if (q < 0) return null;
-            File f = new File(URLDecoder.decode(url.substring(q + 3), "UTF-8"));
-            if (!f.isFile() || !underMediaRoot(f)) return null;
+            long id;
+            try { id = Long.parseLong(url.substring(q + 4).trim()); }
+            catch (Throwable t) { return null; }
+            Uri item = ContentUris.withAppendedId(
+                    MediaStore.Audio.Media.getContentUri("external"), id);
+
+            long len = -1;
+            android.content.res.AssetFileDescriptor afd = null;
+            try {
+                afd = getContentResolver().openAssetFileDescriptor(item, "r");
+                if (afd != null) len = afd.getLength();
+            } catch (Throwable ignored) {
+            } finally {
+                try { if (afd != null) afd.close(); } catch (Throwable ignored) {}
+            }
+            if (len < 0) return null;
+            String name = item.toString();
 
             Map<String, String> h = new HashMap<String, String>();
             h.put("Access-Control-Allow-Origin", "*");   // makes the FFT work
             h.put("Accept-Ranges", "bytes");
-            long len = f.length(), start = 0, end = len - 1;
+            long start = 0, end = len - 1;
 
             // Chromium range-requests media; without 206 support seeking
             // fails and some containers refuse to start at all.
@@ -347,7 +395,8 @@ public class MainActivity extends Activity {
                 } catch (Throwable ignored) {}
                 if (start < 0 || start >= len) start = 0;
                 if (end < start || end >= len) end = len - 1;
-                InputStream in = new FileInputStream(f);
+                InputStream in = getContentResolver().openInputStream(item);
+                if (in == null) return null;
                 long skipped = 0;
                 while (skipped < start) {
                     long n = in.skip(start - skipped);
@@ -356,12 +405,14 @@ public class MainActivity extends Activity {
                 }
                 h.put("Content-Range", "bytes " + start + "-" + end + "/" + len);
                 h.put("Content-Length", String.valueOf(end - start + 1));
-                return new WebResourceResponse(mimeFor(f.getName()), null,
+                return new WebResourceResponse(mimeFor(name), null,
                         206, "Partial Content", h, in);
             }
             h.put("Content-Length", String.valueOf(len));
-            return new WebResourceResponse(mimeFor(f.getName()), null,
-                    200, "OK", h, new FileInputStream(f));
+            InputStream in = getContentResolver().openInputStream(item);
+            if (in == null) return null;
+            return new WebResourceResponse(mimeFor(name), null,
+                    200, "OK", h, in);
         } catch (Throwable t) {
             return new WebResourceResponse("text/plain", "UTF-8", 404,
                     "Not Found", new HashMap<String, String>(),
