@@ -356,6 +356,26 @@ both directions.
 
 ## Where things stand
 
+### Asked for, not yet built
+
+- **MARKETS symbols from the companion.** Its instruments are hardcoded in `sources`
+  (open.er-api CAD base, CoinGecko bitcoin/ethereum), so changing them means editing the
+  card. The mechanism to fix it already exists and is unused here: the companion's
+  `{t:"inject",kind,v,target?}` channel routes to any card whose `accepts` lists that
+  kind, which is how LAUNCH takes URLs from the phone. MARKETS wants `accepts:["symbol"]`,
+  an `onInject` that appends to a user list in `ctx.storage`, and its `sources` built from
+  that list rather than being a literal. The list then rides `config.json` like the radio
+  favourites, so it survives a wipe.
+
+Still open from the original ten-step spec (`SETUP.md`): step 5's *editable* half — the
+radio list and scenes were meant to become `/AMBIENT/`-editable and never did (the
+`origin:"local"` bridge is still a stub, though `config.json` covers most of the need) —
+and all of step 10, the travel cards (journey, phrasebook, docs, offline maps). The v11
+design notes also shortlisted word-of-the-day and on-this-day for the spare bezel slots.
+`/AMBIENT/` on the card has `movies/ photos/ podcasts/ soundscapes/ docs/ maps/` with no
+card behind them; SOUNDSCAPES and PODCASTS are the cheap ones, since MediaStore already
+indexes both.
+
 ### Provisioning after a wipe
 
 Mostly automatic now. The Worker URL is compiled into the APK from `app/worker.url`
