@@ -220,7 +220,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v28";
+const APP_VERSION="v29";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1465,6 +1465,21 @@ const cardVis={
     /* Assigning canvas.width reallocates and clears the backing store, and
        reading clientWidth forces layout — doing both every frame was the
        single most expensive thing on screen. Only resize when it changed. */
+    /* The canvas shipped at a fixed 230px, which left two thirds of the
+       fullscreen view empty. Size it to whatever the stage actually offers
+       instead — but only occasionally, because reading clientHeight forces
+       layout and this runs every frame. */
+    const now=Date.now();
+    if(now-(this._fit||0)>400){
+      this._fit=now;
+      const st=document.getElementById("stage");
+      if(st){
+        const hd=st.querySelector("h2");
+        const avail=Math.max(140,st.clientHeight-
+          (hd?hd.offsetHeight:0)-64);
+        if(Math.abs(avail-cv.clientHeight)>2)cv.style.height=avail+"px";
+      }
+    }
     const w=cv.clientWidth||600,h=cv.clientHeight||220;
     if(cv.width!==w)cv.width=w;
     if(cv.height!==h)cv.height=h;
