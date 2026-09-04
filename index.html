@@ -220,7 +220,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v29";
+const APP_VERSION="v30";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -330,7 +330,12 @@ const audioBus=(()=>{
               Math.floor(Math.pow(len,(i+1)/n))));
             let mx=0;
             for(let j=lo;j<hi;j++)if(raw[j]>mx)mx=raw[j];
-            const v=mx/255;
+            /* Broadcast audio is heavily bass-weighted, so a flat map pegs
+               every low band at maximum and they render as one solid block.
+               A gentle tilt - lows down, highs up, roughly the pink-noise
+               correction a hardware analyser applies - keeps the shape
+               varied. Looks right beats measures right here. */
+            const v=Math.min(1,(mx/255)*(0.55+0.85*Math.pow(i/(n-1||1),0.85)));
             arr[i]=v;sum+=v;
           }
           if(sum>0.01)return true; /* real signal present */
@@ -1388,6 +1393,72 @@ const cardRadio={
    Style registry mirrors the whole system's philosophy (§8):
    each style = {id,draw(ctx2d,w,h,levels,accent)}. OK cycles.  */
 const VIS_STYLES=[
+  /* WARP — built for the glasses rather than for a TV. A flat bar chart is
+     a wall; on a worn display you want depth, so: a projected starfield you
+     fly through (x/z, y/z, respawn at the far plane), with the spectrum
+     hanging in front of it as a translucent mirrored panel.
+     The field is not decoration — bass drives the flight speed, each star
+     is tuned to one frequency band and brightens with it, so the music is
+     what moves you. Trails come free: paint translucent black each frame
+     instead of clearing (see `trails` below).
+     Deliberately kept off the extreme edges and away from full-white: on
+     glasses the frame corners are the first thing to fall outside comfort,
+     and a black ground is what keeps the display restful. */
+  {id:"warp",trails:true,_s:null,draw(g,w,h,lv){
+    const n=lv.length;
+    let bass=0,treb=0,bn=0,tn=0;
+    for(let i=0;i<n;i++){
+      if(i<n*0.20){bass+=lv[i];bn++} else if(i>n*0.55){treb+=lv[i];tn++}
+    }
+    bass=bn?bass/bn:0;treb=tn?treb/tn:0;
+
+    const N=180;
+    if(!this._s||this._s.length!==N){
+      this._s=[];
+      for(let i=0;i<N;i++)this._s.push({
+        x:Math.random()*2-1,y:Math.random()*2-1,
+        z:0.05+Math.random()*0.95,
+        b:Math.random()               /* which band this star listens to */
+      });
+    }
+    const cx=w/2,cy=h/2,k=0.42*Math.min(w,h);
+    /* a floor speed so it drifts when idle, then bass on top */
+    const spd=0.0022+bass*0.0135;
+    for(let i=0;i<N;i++){
+      const s=this._s[i];
+      const pz=s.z;
+      s.z-=spd;
+      if(s.z<=0.035){
+        s.x=Math.random()*2-1;s.y=Math.random()*2-1;s.z=1;s.b=Math.random();
+        continue;                     /* no streak across the respawn */
+      }
+      const sx=cx+s.x*k/s.z, sy=cy+s.y*k/s.z;
+      if(sx<-40||sx>w+40||sy<-40||sy>h+40)continue;
+      const px=cx+s.x*k/pz, py=cy+s.y*k/pz;
+      const t=1-s.z;                  /* 0 far, 1 near */
+      const lvl=lv[Math.min(n-1,Math.floor(s.b*n))]||0;
+      g.globalAlpha=Math.min(1,0.10+t*t*1.05);
+      g.lineWidth=0.5+t*t*2.4;
+      g.strokeStyle="hsl("+(300-s.b*260)+" 88% "+(58+lvl*32)+"%)";
+      g.beginPath();g.moveTo(px,py);g.lineTo(sx,sy);g.stroke();
+    }
+
+    /* the panel: mirrored about its own centre line so it floats rather
+       than standing on a floor, and held to the middle of the frame */
+    const pw=w*0.60,x0=(w-pw)/2,bw=pw/n,my=h*0.5;
+    g.globalAlpha=0.40;
+    for(let i=0;i<n;i++){
+      const v=lv[i],bh=Math.max(0.6,v*h*0.17);
+      g.fillStyle="hsl("+(300-(i/n)*260)+" 92% "+(56+v*26)+"%)";
+      g.fillRect(x0+i*bw,my-bh,Math.max(1,bw-0.6),bh*2);
+    }
+    /* a faint horizon through the panel sells the distance */
+    g.globalAlpha=0.16+treb*0.30;
+    g.fillStyle="var(--accent)";
+    g.fillStyle="hsl(190 90% 70%)";
+    g.fillRect(x0,my-0.5,pw,1);
+    g.globalAlpha=1;
+  }},
   {id:"bars",_pk:null,draw(g,w,h,lv){
     /* frequency → hue: low=magenta through cyan to high=amber */
     const n=lv.length,bw=w/n;
@@ -1488,9 +1559,15 @@ const cardVis={
        more still, rather than 32 fat ones stretched to fit. */
     const want=Math.max(24,Math.min(192,Math.round(w/5)));
     if(this._levels.length!==want)this._levels=new Float32Array(want);
-    g.clearRect(0,0,w,h);
+    const S=VIS_STYLES[this.styleIdx];
+    if(S.trails){
+      /* painting translucent black instead of clearing leaves motion
+         trails, which is what makes the starfield read as travel - and it
+         costs exactly the same as the clear it replaces */
+      g.globalAlpha=1;g.fillStyle="rgba(0,0,0,0.30)";g.fillRect(0,0,w,h);
+    }else g.clearRect(0,0,w,h);
     const real=ctx.audio.getLevels(this._levels);
-    VIS_STYLES[this.styleIdx].draw(g,w,h,this._levels);
+    S.draw(g,w,h,this._levels);
     const tag=document.getElementById("vis-tag");
     if(tag)tag.textContent=VIS_STYLES[this.styleIdx].id+
       (ctx.audio.playing()?(real?" · live fft":" · synthetic"):" · idle");
