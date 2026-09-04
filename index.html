@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v34";
+const APP_VERSION="v35";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1524,7 +1524,15 @@ const VIS_STYLES=[
        stopping at an edge. */
     const pw=w*(0.72+bass*0.04),x0=(w-pw)/2,my=h*0.5,step=pw/(n-1||1);
     const amp=h*0.13*(1+flash*0.5);
-    let mean=0;for(let i=0;i<n;i++)mean+=lv[i];mean/=(n||1);
+    /* Deflect against a LOCAL baseline, not the global mean. Subtracting
+       one mean leaves the spectral tilt's slope in the signal, so the line
+       sat progressively higher toward the treble end and stopped on a hard
+       step instead of running level. A wide moving average removes that
+       trend and leaves only the wiggle - the line stays horizontal and the
+       music is what moves it. */
+    const R=Math.max(2,Math.round(n/8));
+    const pre=new Float64Array(n+1);
+    for(let i=0;i<n;i++)pre[i+1]=pre[i]+lv[i];
     const pts=[];
     for(let i=0;i<n;i++){
       /* smoothed across neighbours — a raw envelope is spiky, and a spiky
@@ -1532,7 +1540,12 @@ const VIS_STYLES=[
       const a=lv[i-1]!==undefined?lv[i-1]:lv[i];
       const b=lv[i+1]!==undefined?lv[i+1]:lv[i];
       const v=(a+lv[i]*2+b)/4;
-      pts.push([x0+i*step,my+(v-mean)*amp*2]);
+      const lo=Math.max(0,i-R),hi=Math.min(n,i+R+1);
+      const base=(pre[hi]-pre[lo])/(hi-lo);
+      /* ease both ends back to the centreline so the trace settles into
+         the fade instead of ending on a step */
+      const win=Math.pow(Math.sin(Math.PI*(i/(n-1||1))),0.6);
+      pts.push([x0+i*step,my+(v-base)*amp*3.2*win]);
     }
     const trace=()=>{
       g.beginPath();
