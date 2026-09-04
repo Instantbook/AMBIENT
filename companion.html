@@ -127,9 +127,18 @@ const $=id=>document.getElementById(id);
 $("room").value=localStorage.getItem("amb.room")||"";
 $("worker").value=localStorage.getItem("amb.worker")||"";
 function log(m){$("log").textContent=m}
-function setLink(on){const el=$("link");
-  el.className=on?"on":"off";
-  el.textContent=on?"● linked":"○ not linked"}
+/* Three states, not two. "Linked" used to mean only that the WebSocket to
+   the Worker had opened - which says nothing about whether the glasses are
+   in the room. A dead display looked exactly like a working one, and every
+   button press reported success while going nowhere. The Worker now reports
+   who is present, so this can tell you the difference. */
+function setLink(state){
+  const el=$("link");
+  if(state==="ready"){el.className="on";el.textContent="● linked"}
+  else if(state==="waiting"){
+    el.className="off";el.textContent="◐ no glasses in room";
+  }else{el.className="off";el.textContent="○ not linked"}
+}
 function connect(){
   const room=$("room").value.trim().toUpperCase();
   const base=$("worker").value.trim();
@@ -140,9 +149,27 @@ function connect(){
   const url=base.replace(/^http/,"ws").replace(/\/$/,"")+
     "/ws?room="+encodeURIComponent(room)+"&role=remote";
   try{ws=new WebSocket(url)}catch(e){log("bad worker URL");return}
-  ws.onopen=()=>{setLink(true);log("linked to "+room)};
-  ws.onclose=()=>{setLink(false);log("link closed")};
+  ws.onopen=()=>{
+    setLink("waiting");log("reached relay — checking for glasses…");
+    beat();                      /* ask immediately, then keep asking */
+    clearInterval(timer);timer=setInterval(beat,20000);
+  };
+  ws.onmessage=e=>{
+    let m;try{m=JSON.parse(e.data)}catch(err){return}
+    if(m.t==="pong"||m.t==="peers"){
+      setLink(m.display>0?"ready":"waiting");
+      log(m.display>0?"linked to "+room
+        :"relay OK, but no glasses in room "+room);
+    }
+  };
+  ws.onclose=()=>{clearInterval(timer);setLink("off");log("link closed")};
   ws.onerror=()=>log("link error — check worker /ws");
+}
+let timer=null;
+function beat(){
+  /* doubles as the keepalive: a phone screen locking is exactly when an
+     idle socket gets dropped somewhere in the middle */
+  if(ws&&ws.readyState===1){try{ws.send(JSON.stringify({t:"ping"}))}catch(e){}}
 }
 function send(o){
   if(!ws||ws.readyState!==1){log("not linked");return}

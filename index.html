@@ -261,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v55";
+const APP_VERSION="v56";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -593,6 +593,7 @@ const companion=(()=>{
     emit("companion",{state:v,code});}
   function handle(msg){
     let m;try{m=JSON.parse(msg)}catch(e){return}
+    if(m.t==="pong"||m.t==="peers")return;   /* heartbeat / presence only */
     if(m.t==="key"&&["up","down","left","right","enter","back"]
       .includes(m.k))route(m.k);
     else if(m.t==="text"){
@@ -627,6 +628,27 @@ const companion=(()=>{
           {kind:m.kind,v:m.v})}catch(e){}
     }
   }
+  /* A socket that dies mid-route takes no close frame with it: onclose never
+     fires, the retry below never runs, and the header goes on claiming LINK
+     for as long as the app is open. The phone then sends into a room with
+     nobody in it and reports success, because reaching the Worker is all it
+     ever checked. Only a ping that stops coming back proves the link is
+     alive, so the heartbeat is what actually makes this reliable. */
+  const PING_MS=25000, DEAD_MS=70000;
+  let beat=null,lastRx=0;
+  function stopBeat(){clearInterval(beat);beat=null}
+  function startBeat(){
+    stopBeat();lastRx=Date.now();
+    beat=setInterval(()=>{
+      if(!ws||ws.readyState!==1)return;
+      if(Date.now()-lastRx>DEAD_MS){
+        /* unanswered too long: drop it and let onclose reconnect */
+        try{ws.close()}catch(e){}
+        return;
+      }
+      try{ws.send(JSON.stringify({t:"ping"}))}catch(e){}
+    },PING_MS);
+  }
   function connect(){
     const base=WORKER_BASE();
     if(!base||typeof WebSocket==="undefined"){setState("off");return}
@@ -634,9 +656,9 @@ const companion=(()=>{
       const url=base.replace(/^http/,"ws").replace(/\/$/,"")+
         "/ws?room="+code+"&role=display";
       ws=new WebSocket(url);
-      ws.onopen=()=>setState("on");
-      ws.onmessage=e=>handle(e.data);
-      ws.onclose=()=>{setState("off");
+      ws.onopen=()=>{setState("on");startBeat()};
+      ws.onmessage=e=>{lastRx=Date.now();handle(e.data)};
+      ws.onclose=()=>{stopBeat();setState("off");
         clearTimeout(retry);retry=setTimeout(connect,5000)};
       ws.onerror=()=>{try{ws.close()}catch(e){}};
     }catch(e){setState("off")}

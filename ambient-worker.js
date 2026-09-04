@@ -263,6 +263,34 @@ function decode(s) {
    tagged with their role for future targeted routing.          */
 export class Room {
   constructor(state) { this.state = state; }
+
+  /** How many of each role are actually in the room right now. The phone
+   *  used to show "linked" on ws.onopen alone, which only proves it reached
+   *  the Worker - it said nothing about whether the glasses were there, so
+   *  a dead display looked identical to a working one. */
+  /** `gone` is the socket that is closing. It has to be excluded explicitly:
+   *  getWebSockets() still lists it while webSocketClose is running, so
+   *  announcing without this told the phone display:1 at the exact moment
+   *  the glasses left - the one announcement that most needed to be right. */
+  peers(gone) {
+    let display = 0, remote = 0;
+    for (const ws of this.state.getWebSockets()) {
+      if (gone && ws === gone) continue;
+      const tags = this.state.getTags(ws) || [];
+      if (tags.indexOf("display") >= 0) display++; else remote++;
+    }
+    return { display, remote };
+  }
+
+  announce(gone) {
+    const msg = JSON.stringify(
+      Object.assign({ t: "peers" }, this.peers(gone)));
+    for (const ws of this.state.getWebSockets()) {
+      if (gone && ws === gone) continue;
+      try { ws.send(msg); } catch (e) {}
+    }
+  }
+
   async fetch(req) {
     if (req.headers.get("Upgrade") !== "websocket")
       return new Response("expected websocket", { status: 426 });
@@ -270,15 +298,40 @@ export class Room {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.state.acceptWebSocket(server, [role]);
+    this.announce();
     return new Response(null, { status: 101, webSocket: client });
   }
+
   webSocketMessage(ws, msg) {
     if (typeof msg !== "string" || msg.length > 8192) return;
+    // Heartbeat. An idle WebSocket can die at any hop in between without a
+    // close frame ever arriving, so the client's onclose never fires and it
+    // never retries - it just sits there believing it is connected. A ping
+    // that stops being answered is the only reliable evidence. The pong
+    // carries the peer counts, so both ends also learn who is present.
+    if (msg.indexOf('"ping"') >= 0) {
+      try {
+        const m = JSON.parse(msg);
+        if (m && m.t === "ping") {
+          ws.send(JSON.stringify(Object.assign({ t: "pong" }, this.peers())));
+          return;                       // never broadcast a heartbeat
+        }
+      } catch (e) { /* fall through and treat it as a normal message */ }
+    }
     for (const other of this.state.getWebSockets())
       if (other !== ws)
         try { other.send(msg); } catch (e) {}
   }
-  webSocketClose(ws) { try { ws.close(); } catch (e) {} }
+
+  webSocketClose(ws) {
+    try { ws.close(); } catch (e) {}
+    this.announce(ws);
+  }
+
+  webSocketError(ws) {
+    try { ws.close(); } catch (e) {}
+    this.announce(ws);
+  }
 }
 
 /* Deployment config now lives in wrangler.toml at the repo root. */
