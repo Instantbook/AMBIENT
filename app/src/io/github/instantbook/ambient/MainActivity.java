@@ -8,7 +8,24 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Process;
 import android.os.SystemClock;
+import android.webkit.CookieManager;
+import android.webkit.MimeTypeMap;
+import android.webkit.WebResourceResponse;
+import java.io.ByteArrayInputStream;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.net.URLDecoder;
+import java.util.HashMap;
+import java.util.Map;
 import android.webkit.JavascriptInterface;
+import android.webkit.MimeTypeMap;
+import android.webkit.WebResourceResponse;
+import java.io.ByteArrayInputStream;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.net.URLDecoder;
+import java.util.HashMap;
+import java.util.Map;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.RandomAccessFile;
@@ -69,6 +86,30 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String worker() { return atAmbient ? WORKER_URL : ""; }
+
+        /** [{name,dir,path,size}] - dir is the album folder, for grouping. */
+        @JavascriptInterface
+        public String listMedia() {
+            if (!atAmbient) return "[]";
+            java.util.List<File> found = new java.util.ArrayList<File>();
+            for (File r : mediaRoots()) scan(r, 0, found);
+            StringBuilder b = new StringBuilder("[");
+            boolean first = true;
+            for (File f : found) {
+                if (!first) b.append(",");
+                first = false;
+                String parent = f.getParentFile() != null
+                        ? f.getParentFile().getName() : "";
+                b.append("{\"name\":\"").append(jesc(f.getName()))
+                 .append("\",\"dir\":\"").append(jesc(parent))
+                 .append("\",\"path\":\"").append(jesc(f.getAbsolutePath()))
+                 .append("\",\"size\":").append(f.length()).append("}");
+            }
+            return b.append("]").toString();
+        }
+
+        @JavascriptInterface
+        public String mediaBase() { return atAmbient ? MEDIA_HOST : ""; }
 
         @JavascriptInterface
         public String configPath() {
@@ -211,6 +252,128 @@ public class MainActivity extends Activity {
                 : new File(getFilesDir(), "config.json");
     }
 
+    /* ---------------- local media ----------------
+       An https page cannot load file:// URLs, and routing local audio over a
+       plain-http helper would be blocked as mixed content. So the app serves
+       files under an https URL it intercepts itself: the page asks for
+       https://ambient.local/media?p=..., shouldInterceptRequest reads the
+       file, and because the response carries CORS headers the audio is
+       same-scheme AND analysable - local tracks drive the real FFT exactly
+       like the CORS-clean radio streams do. */
+    private static final String MEDIA_HOST = "https://ambient.local/media";
+
+    private File[] mediaRoots() {
+        java.util.List<File> out = new java.util.ArrayList<File>();
+        File[] vols = new File("/storage").listFiles();
+        if (vols != null) {
+            for (File v : vols) {
+                if ("self".equals(v.getName())) continue;
+                out.add(new File(v, "Music"));
+                out.add(new File(v, "AMBIENT/music"));
+            }
+        }
+        out.add(new File("/storage/emulated/0/Music"));
+        out.add(new File("/storage/emulated/0/AMBIENT/music"));
+        return out.toArray(new File[0]);
+    }
+
+    private static boolean isAudio(String name) {
+        String n = name.toLowerCase(java.util.Locale.US);
+        return n.endsWith(".mp3") || n.endsWith(".m4a") || n.endsWith(".aac")
+            || n.endsWith(".flac") || n.endsWith(".ogg") || n.endsWith(".oga")
+            || n.endsWith(".wav") || n.endsWith(".opus");
+    }
+
+    private static String mimeFor(String name) {
+        String n = name.toLowerCase(java.util.Locale.US);
+        if (n.endsWith(".mp3")) return "audio/mpeg";
+        if (n.endsWith(".m4a") || n.endsWith(".aac")) return "audio/mp4";
+        if (n.endsWith(".flac")) return "audio/flac";
+        if (n.endsWith(".ogg") || n.endsWith(".oga") || n.endsWith(".opus"))
+            return "audio/ogg";
+        if (n.endsWith(".wav")) return "audio/wav";
+        return "application/octet-stream";
+    }
+
+    /** Depth 5: tracks on this device sit at Music/<artist>/<album>/file. */
+    private void scan(File dir, int depth, java.util.List<File> out) {
+        if (depth > 5 || out.size() > 400 || dir == null || !dir.isDirectory())
+            return;
+        File[] kids = dir.listFiles();
+        if (kids == null) return;
+        for (File k : kids) {
+            if (out.size() > 400) return;
+            String n = k.getName();
+            if (n.startsWith(".")) continue;      // .thumbnails and friends
+            if (k.isDirectory()) scan(k, depth + 1, out);
+            else if (isAudio(n)) out.add(k);
+        }
+    }
+
+    /** Only ever serve from inside a known media root - the page asks for
+     *  arbitrary paths, and this is what stops it reading the filesystem. */
+    private boolean underMediaRoot(File f) {
+        try {
+            String c = f.getCanonicalPath();
+            for (File r : mediaRoots()) {
+                if (c.startsWith(r.getCanonicalPath() + File.separator))
+                    return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private WebResourceResponse serveMedia(String url, String rangeHeader) {
+        try {
+            int q = url.indexOf("?p=");
+            if (q < 0) return null;
+            File f = new File(URLDecoder.decode(url.substring(q + 3), "UTF-8"));
+            if (!f.isFile() || !underMediaRoot(f)) return null;
+
+            Map<String, String> h = new HashMap<String, String>();
+            h.put("Access-Control-Allow-Origin", "*");   // makes the FFT work
+            h.put("Accept-Ranges", "bytes");
+            long len = f.length(), start = 0, end = len - 1;
+
+            // Chromium range-requests media; without 206 support seeking
+            // fails and some containers refuse to start at all.
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                String[] parts = rangeHeader.substring(6).split("-");
+                try {
+                    if (parts.length > 0 && parts[0].length() > 0)
+                        start = Long.parseLong(parts[0].trim());
+                    if (parts.length > 1 && parts[1].length() > 0)
+                        end = Long.parseLong(parts[1].trim());
+                } catch (Throwable ignored) {}
+                if (start < 0 || start >= len) start = 0;
+                if (end < start || end >= len) end = len - 1;
+                InputStream in = new FileInputStream(f);
+                long skipped = 0;
+                while (skipped < start) {
+                    long n = in.skip(start - skipped);
+                    if (n <= 0) break;
+                    skipped += n;
+                }
+                h.put("Content-Range", "bytes " + start + "-" + end + "/" + len);
+                h.put("Content-Length", String.valueOf(end - start + 1));
+                return new WebResourceResponse(mimeFor(f.getName()), null,
+                        206, "Partial Content", h, in);
+            }
+            h.put("Content-Length", String.valueOf(len));
+            return new WebResourceResponse(mimeFor(f.getName()), null,
+                    200, "OK", h, new FileInputStream(f));
+        } catch (Throwable t) {
+            return new WebResourceResponse("text/plain", "UTF-8", 404,
+                    "Not Found", new HashMap<String, String>(),
+                    new ByteArrayInputStream(new byte[0]));
+        }
+    }
+
+    private static String jesc(String v) {
+        return v.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", " ").replace("\r", " ");
+    }
+
     private final Host host = new Host();
     /** Written on the UI thread in onPageStarted, read from binder threads. */
     private volatile boolean atAmbient = true;
@@ -253,8 +416,34 @@ public class MainActivity extends Activity {
                 atAmbient = url == null || url.startsWith(URL);
                 super.onPageStarted(v, url, f);
             }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(
+                    WebView v, WebResourceRequest req) {
+                String u = req.getUrl() != null ? req.getUrl().toString() : "";
+                if (atAmbient && u.startsWith(MEDIA_HOST)) {
+                    String range = null;
+                    try {
+                        Map<String, String> hs = req.getRequestHeaders();
+                        if (hs != null) range = hs.get("Range");
+                    } catch (Throwable ignored) {}
+                    return serveMedia(u, range);
+                }
+                return super.shouldInterceptRequest(v, req);
+            }
         });
         web.addJavascriptInterface(host, "AmbientHost");
+
+        // Logins on sites opened from LAUNCH. Persistent cookies and site
+        // localStorage already survive a restart, but two defaults get in the
+        // way: WebView blocks THIRD-PARTY cookies by default, which breaks
+        // most "sign in with..." redirect flows, and cookies are only written
+        // to disk on a clean shutdown, so a force-stop loses a fresh session.
+        try {
+            CookieManager cm = CookieManager.getInstance();
+            cm.setAcceptCookie(true);
+            cm.setAcceptThirdPartyCookies(web, true);
+        } catch (Throwable ignored) {}
 
         setContentView(web);
         web.requestFocus();
@@ -264,6 +453,14 @@ public class MainActivity extends Activity {
         } else {
             web.restoreState(state);
         }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // flush now rather than trusting a clean exit - a TV app is usually
+        // killed, not closed, and an unflushed login is a lost login
+        try { CookieManager.getInstance().flush(); } catch (Throwable ignored) {}
     }
 
     @Override

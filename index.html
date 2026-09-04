@@ -233,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v44";
+const APP_VERSION="v45";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1853,6 +1853,93 @@ const cardLaunch={
   }
 };
 
+/* ---- music: files on the microSD, played through the same audio bus ----
+   The wrapper serves them over an https URL it intercepts itself, with CORS
+   headers, so a local track is analysable exactly like a CORS-clean radio
+   stream: the visualiser gets real FFT rather than the synthetic fallback.
+   Without the wrapper there is no filesystem to read, and the card says so
+   rather than pretending to be empty. */
+const cardMusic={
+  id:"music",title:"MUSIC",icon:"note",
+  pane:"listen",size:"large",order:52,refresh:null,offline:"local-first",
+  sel:0,_tracks:null,_scanned:false,
+  init(ctx){this._scan(ctx)},
+  _scan(ctx){
+    try{
+      if(!hostBridge||!hostBridge.listMedia){this._tracks=null;return}
+      this._tracks=JSON.parse(hostBridge.listMedia()||"[]");
+      this._scanned=true;
+    }catch(e){this._tracks=[]}
+    try{ctx.rerender()}catch(e){}
+  },
+  _list(){return Array.isArray(this._tracks)?this._tracks:[]},
+  _item(t){
+    /* strip the extension for display, keep the folder as the album line */
+    const label=String(t.name||"").replace(/\.[a-z0-9]+$/i,"");
+    let base="";try{base=hostBridge.mediaBase()}catch(e){}
+    return{label,url:base+"?p="+encodeURIComponent(t.path),
+      cors:true,region:t.dir||""};
+  },
+  render(ctx){
+    if(!hostBridge||!hostBridge.listMedia)
+      return "<div class='state'>Local files need the AMBIENT app \u2014 a web "+
+        "page has no filesystem to read. Put music in <span class='val'>"+
+        "Music/</span> or <span class='val'>AMBIENT/music/</span> on the card "+
+        "or internal storage.</div>";
+    const list=this._list();
+    if(!list.length)
+      return "<div class='state'>No audio found. Looked in <span class='val'>"+
+        "Music/</span> and <span class='val'>AMBIENT/music/</span> on every "+
+        "volume.<br><br>OK rescans.</div>";
+    const cur=ctx.audio.current();
+    return list.map((t,i)=>{
+      const it=this._item(t);
+      const now=cur&&cur.url===it.url;
+      return "<div class='row"+(i===this.sel?" hl sel":"")+
+        "' data-row='"+i+"'>"+
+        "<span class='"+(i===this.sel?"":"lbl")+"'>"+
+        (now?"<span style='color:var(--up)'>\u25b6 </span>":"")+
+        esc(it.label)+"</span>"+
+        "<span style='color:"+srcColor(it.region)+";font-size:12px'>"+
+        esc(it.region)+"</span></div>";
+    }).join("")+
+    "<div class='state' style='margin-top:10px'>\u25b2\u25bc choose \u00b7 "+
+    "OK play \u00b7 \u25c4 back to tiles \u00b7 "+list.length+" tracks</div>";
+  },
+  renderCompact(ctx){
+    if(!hostBridge||!hostBridge.listMedia)return face("\u2014","app only");
+    const cur=ctx.audio.current(),list=this._list();
+    const mine=cur&&list.some(t=>this._item(t).url===cur.url);
+    if(mine)return face("\u25b6",esc(cur.label),
+      {color:"var(--up)",sub:esc(cur.region||"")});
+    const dirs=[];
+    list.forEach(t=>{if(t.dir&&dirs.indexOf(t.dir)<0)dirs.push(t.dir)});
+    return face(list.length,"tracks",{dots:dirs.map(srcColor)});
+  },
+  _play(ctx,i){
+    const list=this._list();
+    if(!list[i])return;
+    this.sel=i;ctx.audio.toggle(this._item(list[i]));render();
+  },
+  onKey(ctx,k){
+    const list=this._list();
+    if(!list.length){
+      if(k==="enter"){this._scan(ctx);return true}
+      return false;
+    }
+    if(k==="down"&&this.sel<list.length-1){this.sel++;ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"){this._play(ctx,this.sel);return true}
+    return false;
+  },
+  onPick(ctx,i){this._play(ctx,i)},
+  /* double-press the tile: start or stop the highlighted track in place */
+  onToggle(ctx){
+    const list=this._list();
+    if(list[this.sel])ctx.audio.toggle(this._item(list[this.sel]));
+  }
+};
+
 /* ---- device: what a web page cannot see about its own machine ----
    There is no browser API for system CPU or RAM: navigator.deviceMemory is
    a coarse rounded hint and performance.memory is only the JS heap. Both
@@ -2014,7 +2101,7 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardVis,cardLaunch,cardScenes,cardDevice,cardSystem]);
+  cardRadio,cardMusic,cardVis,cardLaunch,cardScenes,cardDevice,cardSystem]);
 applyScene(allScenes().find(sc=>sc.id===currentScene)||SCENES[0]);
 setOnline(navigator.onLine);
 companion.connect();
