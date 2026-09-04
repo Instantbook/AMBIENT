@@ -244,7 +244,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v53";
+const APP_VERSION="v54";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1222,6 +1222,16 @@ function dayNightIcon(night,size){
     "<path d='M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2"+
     "M19.5 4.5l-2 2M6.5 17.5l-2 2'/></g></svg>";
 }
+/* Compact relative age: "4m", "3h", "2d". A wall-clock timestamp answers
+   the wrong question on a glance display - what you want to know is whether
+   this is fresh, not when it happened. */
+function ago(ts){
+  const s=Math.max(0,(Date.now()-ts)/1000);
+  if(s<60)return "just now";
+  if(s<3600)return Math.round(s/60)+"m";
+  if(s<86400)return Math.round(s/3600)+"h";
+  return Math.round(s/86400)+"d";
+}
 function srcColor(name){
   let h=0;for(const ch of String(name||""))h=(h*31+ch.charCodeAt(0))%360;
   return "hsl("+h+" 65% 62%)";
@@ -1414,9 +1424,12 @@ const cardMarkets={
 /* ---- headlines ---- */
 const cardHeadlines={
   id:"headlines",title:"HEADLINES",icon:"news",
-  pane:"news",size:"large",order:40,refresh:600,offline:"cached",
+  /* 600s made the card look frozen - the Worker's own upstream cache is
+     300s, so half the checks could not have returned anything new even in
+     principle. Matching it means a refresh can actually find something. */
+  pane:"news",size:"large",order:40,refresh:300,offline:"cached",
   sources:[{key:"news",origin:"worker",path:"/feeds"}],
-  sel:0,
+  sel:0,_open:false,
   _items(ctx,data){
     const d=(data&&data.news)||ctx.cachedOnly("news");
     if(!d)return null;
@@ -1434,13 +1447,33 @@ const cardHeadlines={
     }
     return items.map((it,i)=>{
       const c=srcColor(it.source);
-      return "<div class='hl"+(i===this.sel?" sel":"")+
+      const on=(i===this.sel);
+      /* The selected story expands in place. OK used to do nothing at all,
+         so a headline was the whole of what the card could ever tell you. */
+      const body=(on&&this._open&&it.summary)
+        ? "<div class='lbl' style='margin:6px 0 2px;line-height:1.5;"+
+          "white-space:normal'>"+esc(it.summary)+"</div>"
+        : (on&&this._open)
+        ? "<div class='lbl' style='margin:6px 0 2px'>"+
+          "no summary in this feed</div>"
+        : "";
+      return "<div class='hl"+(on?" sel":"")+
         "' data-row='"+i+"'"+
         " style='border-left:3px solid "+c+";padding-left:10px'>"+
-        esc(it.title)+
+        esc(it.title)+body+
         "<span class='src' style='color:"+c+"'>"+
-        esc(it.source||"")+"</span></div>";
+        esc(it.source||"")+(it.ts?" · "+ago(it.ts):"")+"</span></div>";
     }).join("")||"<div class='state'>feed empty</div>";
+  },
+  /* Pinned: how old the batch is, and how to force a new one. "Static" was
+     partly a reporting problem - with no timestamps you cannot tell a feed
+     that is quiet from one that is broken. */
+  renderFooter(ctx){
+    const c=cacheGet("news");
+    return "<div class='lbl' style='display:flex;"+
+      "justify-content:space-between'><span>"+
+      (this._busy?"refreshing…":c?"updated "+ago(c.t):"never updated")+
+      "</span><span>OK expands · ► refresh</span></div>";
   },
   /* A headline cannot be read in a 118px square — it just gets guillotined
      mid-word. The tile reports the HOLDING instead: how many, from how many
@@ -1457,12 +1490,34 @@ const cardHeadlines={
   },
   onKey(ctx,k){
     const items=this._items(ctx,null);if(!items)return false;
-    if(k==="down"&&this.sel<items.length-1){this.sel++;ctx.rerender();
-      return true}
-    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    /* moving the selection closes the open story - keeping it open while
+       the highlight walked away read as the summary belonging to whatever
+       row was now selected */
+    if(k==="down"&&this.sel<items.length-1){this.sel++;this._open=false;
+      ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._open=false;
+      ctx.rerender();return true}
+    if(k==="enter"){this._open=!this._open;ctx.rerender();return true}
+    /* ► forces a fetch. ◄ is left alone so it can still leave the card -
+       an exit must never be the key you have to think about. */
+    if(k==="right"){this._refresh(ctx);return true}
     return false;
   },
-  onPick(ctx,i){this.sel=i;ctx.rerender()}
+  _refresh(ctx){
+    if(this._busy)return;
+    this._busy=true;ctx.rerender();
+    /* force:true bypasses the per-card interval; refreshCard re-renders
+       when it lands, and clearing the flag afterwards repaints the footer
+       whether it succeeded or failed */
+    Promise.resolve(refreshCard(this,true))
+      .catch(()=>{})
+      .then(()=>{this._busy=false;try{ctx.rerender()}catch(e){}});
+  },
+  onToggle(ctx){this._refresh(ctx)},
+  onPick(ctx,i){
+    if(i===this.sel)this._open=!this._open; else {this.sel=i;this._open=true}
+    ctx.rerender();
+  }
 };
 function esc(s){return String(s||"").replace(/[<>&]/g,
   c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}

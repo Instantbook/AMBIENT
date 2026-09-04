@@ -24,6 +24,18 @@
 const UA = "Mozilla/5.0 (compatible; AMBIENT/1.0; " +
   "+https://instantbook.github.io/AMBIENT/)";
 
+/* One element's text out of an <item> block, CDATA unwrapped. Namespaced
+   names (content:encoded, dc:date) need the colon escaped, and the tag must
+   not match a longer one that merely starts the same way - <link> and
+   <linkTarget>, <title> and <titleAlt> - hence the [\s>] boundary. */
+const pick = (block, tag) => {
+  const t = tag.replace(/[:.]/g, "\\$&");
+  const m = new RegExp("<" + t + "(?:\\s[^>]*)?>([\\s\\S]*?)<\\/" + t + ">")
+    .exec(block);
+  if (!m) return "";
+  return m[1].replace(/^\s*<!\[CDATA\[/, "").replace(/\]\]>\s*$/, "").trim();
+};
+
 const CORS = env => ({
   "Access-Control-Allow-Origin": env.ALLOW_ORIGIN || "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
@@ -117,15 +129,52 @@ export default {
           const xml = await r.text();
           const source = (xml.match(/<title>(.*?)<\/title>/) || [])[1]
             || new URL(f).hostname;
-          const rx = /<item>[\s\S]*?<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>[\s\S]*?<link>(.*?)<\/link>[\s\S]*?<\/item>/g;
-          let m, n = 0;
-          while ((m = rx.exec(xml)) && n < 6) {
-            items.push({ title: decode(m[1]), source: decode(source),
-              link: m[2].trim() });
+          /* Grab whole <item> blocks and pick fields out of each one.
+             Matching title/link/description in a single expression forced
+             them into a fixed document order that real feeds do not agree
+             on, and any feed that ordered them differently silently
+             contributed nothing. */
+          const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>/g) || [];
+          let n = 0;
+          for (const b of blocks) {
+            if (n >= 8) break;
+            const title = decode(pick(b, "title"));
+            if (!title) continue;
+            const link = pick(b, "link") ||
+              (/<link[^>]*href="([^"]+)"/.exec(b) || [])[1] || "";
+            /* The summary is the whole point of opening a headline. Feeds
+               put it in description, or content:encoded, or an Atom
+               summary; take whichever exists, strip the markup publishers
+               wrap it in, and cap it so one verbose feed cannot dominate
+               the payload. */
+            let sum = pick(b, "description") ||
+              pick(b, "content:encoded") || pick(b, "summary") || "";
+            sum = decode(sum).replace(/<[^>]*>/g, " ")
+              .replace(/\s+/g, " ").trim();
+            if (sum.length > 400) sum = sum.slice(0, 400).replace(
+              /\s+\S*$/, "") + "…";
+            /* If the summary just repeats the title it is noise, not
+               content - several feeds do exactly that. */
+            if (sum && sum.toLowerCase().startsWith(
+              title.toLowerCase().slice(0, 40))) sum = "";
+            const when = pick(b, "pubDate") || pick(b, "published") ||
+              pick(b, "updated") || pick(b, "dc:date") || "";
+            const ts = when ? Date.parse(decode(when)) : NaN;
+            items.push({
+              title, source: decode(source), link: link.trim(),
+              summary: sum,
+              ts: isFinite(ts) ? ts : null,
+            });
             n++;
           }
         } catch (e) { /* dead feed: skip */ }
       }));
+      /* Newest first, and interleaved rather than one publisher then the
+         next. Without this the list looked frozen: the same source always
+         held the top rows, so a genuinely fresh story further down was
+         invisible. Feeds without dates keep their arrival order at the
+         end rather than being dropped. */
+      items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
       return json(items, 200, env);
     }
 
@@ -139,15 +188,36 @@ function json(obj, status, env) {
     headers: { "Content-Type": "application/json", ...CORS(env) },
   });
 }
+/* A malformed entity must not take the whole feed down: String.fromCodePoint
+   throws on anything outside the Unicode range, and one bad byte in one
+   headline would otherwise reject the parse and drop that publisher
+   entirely. Leave the text as-is instead. */
+function safeChar(n) {
+  try {
+    if (!isFinite(n) || n < 0 || n > 0x10FFFF) return "";
+    return String.fromCodePoint(n);
+  } catch (e) { return ""; }
+}
+
 function decode(s) {
   // The channel <title> is matched without the CDATA handling the per-item
   // regex has, so BBC arrived as the literal "<![CDATA[BBC News]]>" - which
   // then showed as the source label and fed srcColor()'s hash.
   return String(s || "")
     .replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1")
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">").replace(/&#39;|&apos;/g, "'")
-    .replace(/&quot;/g, '"').trim();
+    // Numeric entities, decimal and hex. Publishers emit these constantly
+    // for dashes and curly quotes - ΤΟ ΒΗΜΑ headlines arrived carrying a
+    // literal "&#8211;" - and there are far too many to name one by one.
+    .replace(/&#(\d+);/g, (_, n) => safeChar(parseInt(n, 10)))
+    .replace(/&#[xX]([0-9a-fA-F]+);/g, (_, n) => safeChar(parseInt(n, 16)))
+    .replace(/&nbsp;/g, " ").replace(/&hellip;/g, "…")
+    .replace(/&lsquo;|&rsquo;/g, "'").replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&ndash;/g, "–").replace(/&mdash;/g, "—")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
+    // &amp; last, so "&amp;lt;" does not become a real "<"
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ").trim();
 }
 
 /* ---- Room: one Durable Object per room code ----
