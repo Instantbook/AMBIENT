@@ -87,13 +87,20 @@ move as a pair on *every* change to a cached file, or the service worker keeps s
 deploy. The SYSTEM card renders `APP_VERSION`, which is the quickest way to confirm what a device is
 actually running.
 
-**3. Deploys do not always reach the device promptly.** GitHub Pages serves `Cache-Control: max-age=600`,
-so a service-worker update check can read a stale `sw.js`, see no byte change, and keep the old cache
-alive. `index.html` registers with `updateViaCache:"none"` plus an explicit `reg.update()` on load and
-every 10 minutes, and reloads on `controllerchange` (deferred while audio plays). That was still observed
-being slow, so **to force a version onto the device now: `adb shell pm clear <package>`** — either
-`com.tcl.browser` or `io.github.instantbook.ambient`. It wipes localStorage too, so the room code, scenes,
-bookmarks and configured Worker URL all reset.
+**3. `cache.addAll()` fetches through the HTTP cache — this caused the long-standing "deploys don't reach
+the device" bug.** GitHub Pages serves the shell with `Cache-Control: max-age=600`. A newly installed
+service worker would fetch `index.html`, get the *previous* deploy back out of the HTTP cache, and store
+that under the new cache name: the version constant moved and the content did not. The symptom was a
+SYSTEM tile stuck on the old version through a restart *and* a reinstall, because each reload re-primed
+the same stale ten-minute window — which is why `pm clear` looked like the only cure.
+
+Fixed by fetching the shell as `new Request(u,{cache:"reload"})`, which forces the network and refreshes
+the HTTP cache on the way past. **Keep that flag.** Registration is otherwise correct and was never the
+problem: `updateViaCache:"none"`, `reg.update()` on load and every 10 minutes, `skipWaiting` +
+`clients.claim`, and a reload on `controllerchange` deferred while audio plays.
+
+`adb shell pm clear <package>` still forces a version on immediately, but it wipes localStorage — room
+code, scenes, starred stations — so it should now be a last resort rather than routine.
 
 ## Target device (verified over ADB, not assumed)
 
@@ -306,8 +313,14 @@ Principles worth keeping:
   no timers and stops the instant the key is released.
 - **The staged card gets first refusal on every key except BACK.** Handling ◄► in the
   shell first was a real bug: RADIO's ► could never reach the card.
-- **Double-press a tile** runs `onToggle()` — play/stop for RADIO and MUSIC, fullscreen
+- **Double-press a tile** runs `onToggle()` — play/pause for RADIO and MUSIC, fullscreen
   for the visualiser. Only cards that define it pay the 260ms disambiguation delay.
+- **BACK is the page's, and exit is a long press.** The wrapper used to quit on two BACK
+  presses inside 2s. That was safe while BACK only meant "leave", but once it meant "up
+  one level", climbing out of MUSIC (track → album → tiles) was two presses well inside
+  the window and quit the app. `onKeyDown` now claims the key with `startTracking()` and
+  defers to `onKeyUp`, with `onKeyLongPress` doing the exit — a hold cannot be produced
+  by navigating. Don't reintroduce a timing-based exit gesture.
 
 ## Settings live in a file
 
