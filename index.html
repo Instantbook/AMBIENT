@@ -220,7 +220,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v30";
+const APP_VERSION="v31";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -1412,7 +1412,7 @@ const VIS_STYLES=[
     }
     bass=bn?bass/bn:0;treb=tn?treb/tn:0;
 
-    const N=180;
+    const N=280;
     if(!this._s||this._s.length!==N){
       this._s=[];
       for(let i=0;i<N;i++)this._s.push({
@@ -1437,23 +1437,31 @@ const VIS_STYLES=[
       const px=cx+s.x*k/pz, py=cy+s.y*k/pz;
       const t=1-s.z;                  /* 0 far, 1 near */
       const lvl=lv[Math.min(n-1,Math.floor(s.b*n))]||0;
-      g.globalAlpha=Math.min(1,0.10+t*t*1.05);
-      g.lineWidth=0.5+t*t*2.4;
-      g.strokeStyle="hsl("+(300-s.b*260)+" 88% "+(58+lvl*32)+"%)";
-      g.beginPath();g.moveTo(px,py);g.lineTo(sx,sy);g.stroke();
+      const col="hsl("+(300-s.b*260)+" 88% "+(58+lvl*32)+"%)";
+      if(t<0.20){
+        /* distant stars are a pixel wide anyway - a fill is far cheaper
+           than a path+stroke, which is what buys the extra density */
+        g.globalAlpha=0.08+t*1.9;
+        g.fillStyle=col;g.fillRect(sx,sy,1,1);
+      }else{
+        g.globalAlpha=Math.min(1,0.10+t*t*1.05);
+        g.lineWidth=0.5+t*t*2.4+bass*0.9;
+        g.strokeStyle=col;
+        g.beginPath();g.moveTo(px,py);g.lineTo(sx,sy);g.stroke();
+      }
     }
 
     /* the panel: mirrored about its own centre line so it floats rather
        than standing on a floor, and held to the middle of the frame */
-    const pw=w*0.60,x0=(w-pw)/2,bw=pw/n,my=h*0.5;
-    g.globalAlpha=0.40;
+    const pw=w*(0.44+bass*0.045),x0=(w-pw)/2,bw=pw/n,my=h*0.5;
+    g.globalAlpha=0.30;             /* reads as distance, not as a wall */
     for(let i=0;i<n;i++){
-      const v=lv[i],bh=Math.max(0.6,v*h*0.17);
+      const v=lv[i],bh=Math.max(0.6,v*h*0.135);
       g.fillStyle="hsl("+(300-(i/n)*260)+" 92% "+(56+v*26)+"%)";
       g.fillRect(x0+i*bw,my-bh,Math.max(1,bw-0.6),bh*2);
     }
     /* a faint horizon through the panel sells the distance */
-    g.globalAlpha=0.16+treb*0.30;
+    g.globalAlpha=0.12+treb*0.24;
     g.fillStyle="var(--accent)";
     g.fillStyle="hsl(190 90% 70%)";
     g.fillRect(x0,my-0.5,pw,1);
