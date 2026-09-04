@@ -11,9 +11,20 @@ compatibility_date = "2026-09-01"
 [vars]
 # Comma-separated RSS URLs — the /feeds endpoint fetches and parses these
 # server-side so the glasses stay CORS-clean. Edit freely.
-# ekathimerini.com/feed/ was here but returns 403 to any non-browser client,
-# even with a User-Agent — it contributed nothing. tovima.gr serves cleanly.
-FEEDS = "https://feeds.bbci.co.uk/news/world/rss.xml,https://www.tovima.gr/feed/"
+#
+# How much text a source gives you varies enormously, and it decides whether
+# opening a headline is worth doing. Measured average summary length:
+#   Guardian 1134  France24 317  NPR 162  NYT 157  CNN 116  BBC 109  AJ 101
+# The BBC publishes exactly one sentence — that is the feed, not a parsing
+# bug — so the Guardian leads here for anything you actually want to read.
+#
+# Rejected, with reasons, so they do not get retried:
+#   ekathimerini.com  403 to any non-browser client, even with a User-Agent
+#   apnews (rsshub)   403
+#   feeds.reuters.com dead, the endpoint was retired
+#   cbc.ca            times out from here
+#   rss.dw.com        serves no pubDate, so it cannot be sorted by recency
+FEEDS = "https://www.theguardian.com/international/rss,https://feeds.bbci.co.uk/news/world/rss.xml,https://feeds.npr.org/1001/rss.xml,https://www.aljazeera.com/xml/rss/all.xml,https://www.france24.com/en/rss"
 
 # SECURITY: the 5-character room code is convenience pairing, NOT
 # authentication, and this header is only honoured by browsers - curl ignores

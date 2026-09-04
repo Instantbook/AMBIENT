@@ -110,8 +110,11 @@ export default {
     if (url.pathname === "/feeds") {
       const feeds = (env.FEEDS || "").split(",")
         .map(s => s.trim()).filter(Boolean);
-      const items = [];
-      await Promise.all(feeds.map(async f => {
+      /* Kept per feed, not in one pile, so the merge below can guarantee
+         every source is represented. */
+      const perFeed = feeds.map(() => []);
+      await Promise.all(feeds.map(async (f, fi) => {
+        const items = perFeed[fi];
         try {
           // Several publishers 403 a request with no User-Agent, and the
           // failure is invisible here: the 403 body is HTML, the item regex
@@ -127,8 +130,14 @@ export default {
           });
           if (!r.ok) return;
           const xml = await r.text();
-          const source = (xml.match(/<title>(.*?)<\/title>/) || [])[1]
-            || new URL(f).hostname;
+          /* Publishers stuff their whole tagline into the channel title -
+             "Al Jazeera – Breaking News, World News and Video from Al
+             Jazeera" - and that is the label the card prints beside every
+             row and hashes for the source colour. Keep the part before the
+             first separator, and cap it. */
+          const source = shortSource(
+            (xml.match(/<title>(.*?)<\/title>/) || [])[1]
+            || new URL(f).hostname);
           /* Grab whole <item> blocks and pick fields out of each one.
              Matching title/link/description in a single expression forced
              them into a fixed document order that real feeds do not agree
@@ -151,8 +160,13 @@ export default {
               pick(b, "content:encoded") || pick(b, "summary") || "";
             sum = decode(sum).replace(/<[^>]*>/g, " ")
               .replace(/\s+/g, " ").trim();
-            if (sum.length > 400) sum = sum.slice(0, 400).replace(
-              /\s+\S*$/, "") + "…";
+            if (sum.length > 400) {
+              /* Trim on a space, then drop a trailing lone surrogate: slice()
+                 counts UTF-16 units, so cutting mid-pair leaves half a
+                 character that renders as a black diamond. */
+              sum = sum.slice(0, 400).replace(/\s+\S*$/, "")
+                .replace(/[\uD800-\uDBFF]$/, "") + "…";
+            }
             /* If the summary just repeats the title it is noise, not
                content - several feeds do exactly that. */
             if (sum && sum.toLowerCase().startsWith(
@@ -169,12 +183,22 @@ export default {
           }
         } catch (e) { /* dead feed: skip */ }
       }));
-      /* Newest first, and interleaved rather than one publisher then the
-         next. Without this the list looked frozen: the same source always
-         held the top rows, so a genuinely fresh story further down was
-         invisible. Feeds without dates keep their arrival order at the
-         end rather than being dropped. */
-      items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      /* Newest first WITHIN a source, then one from each source in turn.
+         Sorting the whole pile by date instead let a prolific publisher own
+         every visible row - the Guardian posts often enough to fill all
+         twelve on its own - which is how a varied set of feeds still ends
+         up looking like a single source that never changes. Round-robin
+         puts the newest story from each publisher in the first rows and
+         keeps recency order inside each one. */
+      perFeed.forEach(a => a.sort((x, y) => (y.ts || 0) - (x.ts || 0)));
+      const items = [];
+      for (let i = 0; ; i++) {
+        let added = false;
+        for (const a of perFeed) {
+          if (a[i]) { items.push(a[i]); added = true; }
+        }
+        if (!added) break;
+      }
       return json(items, 200, env);
     }
 
@@ -188,6 +212,19 @@ function json(obj, status, env) {
     headers: { "Content-Type": "application/json", ...CORS(env) },
   });
 }
+/* A publisher's channel title down to something that fits beside a headline.
+   Cut at the first separator, then hard-cap - the label is also what
+   srcColor() hashes, so it has to be stable across refreshes, which rules
+   out anything that depends on the item or the time. */
+function shortSource(raw) {
+  /* A colon usually has no space before it ("NPR Topics: News"), a dash
+     always does ("France 24 - International ...") - requiring whitespace on
+     both sides let the colon form through unchanged. */
+  let s = decode(raw).split(/\s*[–—|]\s+|\s*:\s+|\s+-\s+/)[0].trim();
+  if (s.length > 26) s = s.slice(0, 26).replace(/\s+\S*$/, "").trim();
+  return s || "news";
+}
+
 /* A malformed entity must not take the whole feed down: String.fromCodePoint
    throws on anything outside the Unicode range, and one bad byte in one
    headline would otherwise reject the parse and drop that publisher
