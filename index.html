@@ -131,6 +131,19 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .tile.sel h3,.tile:focus h3{color:var(--accent)}
 .tile.staged{border-left:3px solid var(--accent)}
 .tile.off{opacity:.32}
+/* IMMERSIVE fullscreen (a card with immersive:true, i.e. the visualiser).
+   On a worn display the panel border is the worst thing on screen: it
+   traces the exact rectangle where the glasses stop, so your eye locks
+   onto the edge of the device instead of the content. Strip the frame,
+   the glow, the padding and every glyph, and the black content runs
+   straight into the black where there is no screen. BACK still exits, so
+   nothing is lost by having no visible affordance. */
+body.bare #app{padding:0}
+body.bare #cockpit{gap:0}
+body.bare #stage{border:none;box-shadow:none;border-radius:0;padding:0}
+body.bare #stage::before,body.bare #stage::after{display:none}
+body.bare #stage h2{display:none}
+body.bare #vis-foot{display:none}
 /* fullscreen: collapse the grid to the stage; rails stay in the DOM so
    renderCard() can keep refreshing their tiles behind the scenes */
 #cockpit.full{grid-template-areas:"s";grid-template-rows:1fr;
@@ -220,7 +233,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v32";
+const APP_VERSION="v33";
 
 /* ---------------- theme bus ---------------- */
 const THEMES={
@@ -701,6 +714,7 @@ function render(){
   const center=staged();
   if(mode==="overview"){
     cp.classList.remove("full");
+    document.body.classList.remove("bare");
     cp.classList.add("overview");
     const ov=document.getElementById("overview");
     ov.innerHTML=visibleCards().map((c,i)=>{
@@ -734,6 +748,8 @@ function render(){
       center?(center.title||center.id):"";
     const ff=document.getElementById("st-full");
     if(ff)ff.textContent=mode==="full"?"⤡":"⛶";
+    document.body.classList.toggle("bare",
+      mode==="full"&&!!center&&center.immersive===true);
     if(center)renderCard(center);
     focusTile();
   }
@@ -1597,7 +1613,7 @@ const VIS_STYLES=[
   }}
 ];
 const cardVis={
-  id:"vis",title:"VISUALIZER",icon:"wave",
+  id:"vis",title:"VISUALIZER",icon:"wave",immersive:true,
   pane:"listen",size:"large",order:55,refresh:null,offline:"cached",
   styleIdx:0,_raf:null,_levels:new Float32Array(32),
   init(ctx){
@@ -1633,9 +1649,10 @@ const cardVis={
       this._fit=now;
       const st=document.getElementById("stage");
       if(st){
+        const bare=document.body.classList.contains("bare");
         const hd=st.querySelector("h2");
         const avail=Math.max(140,st.clientHeight-
-          (hd?hd.offsetHeight:0)-64);
+          (bare?0:((hd?hd.offsetHeight:0)+64)));
         if(Math.abs(avail-cv.clientHeight)>2)cv.style.height=avail+"px";
       }
     }
@@ -1664,7 +1681,7 @@ const cardVis={
     const cur=ctx.audio.current();
     return "<canvas id='vis-cv' data-row='0' style='width:100%;height:230px;"+
       "display:block'></canvas>"+
-      "<div class='state' style='display:flex;justify-content:"+
+      "<div class='state' id='vis-foot' style='display:flex;justify-content:"+
       "space-between;margin-top:8px'><span id='vis-tag'>"+
       VIS_STYLES[this.styleIdx].id+"</span><span>"+
       (cur?esc(cur.label):"no audio — OK cycles style")+"</span></div>";
