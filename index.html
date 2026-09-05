@@ -261,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v60";
+const APP_VERSION="v61";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -283,7 +283,8 @@ const APP_VERSION="v60";
 const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.scenes","ambient.room",
   "ambient.card.launch.links","ambient.card.vis.style",
-  "ambient.card.radio.favs","ambient.dim"];
+  "ambient.card.radio.favs","ambient.card.video.pos",
+  "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
 function loadConfig(){
@@ -2513,13 +2514,13 @@ const cardVideo={
   id:"video",title:"VIDEO",icon:"wave",
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
   sel:0,_items:null,_level:"folders",_dir:null,_season:null,
-  _playing:null,_note:"",_flash:"",_flashT:null,
+  _playing:null,_note:"",_flash:"",_flashT:null,_ctx:null,
   /* Immersive only while something is actually playing. The shell reads
      this at render time, so it can change: the browse list wants the frame
      and its hints, a playing video wants the whole panel and nothing else
      lit. A card that claimed immersive always would lose its own list. */
   get immersive(){return !!this._playing},
-  init(ctx){this._scan(ctx)},
+  init(ctx){this._ctx=ctx;this._scan(ctx)},
   _scan(ctx){
     try{
       if(!hostBridge||!hostBridge.listVideo){this._items=null;return}
@@ -2590,10 +2591,16 @@ const cardVideo={
     if(this._level==="seasons")
       return this._seasons(this._dir).map(s=>({label:s,season:s,
         meta:this._inDir(this._dir,s).length+" videos"}));
-    return this._inDir(this._dir,this._season).map(v=>({
-      label:v.name||v.file||"video",
-      meta:this._dur(v.dur)+(this._playable(v)?"":" · external"),
-      video:v}));
+    /* a part-watched file says so, so you can see at a glance where you
+       left a series without opening every episode */
+    const pos=this._ctx?this._positions(this._ctx):{};
+    return this._inDir(this._dir,this._season).map(v=>{
+      const at=pos[v.id];
+      return {label:v.name||v.file||"video",
+        meta:(at?"▸ "+this._dur(at*1000)+" / ":"")+this._dur(v.dur)+
+          (this._playable(v)?"":" · external"),
+        video:v};
+    });
   },
   _openShow(show){
     /* one season is not a menu, same rule as MUSIC's single album */
@@ -2629,7 +2636,64 @@ const cardVideo={
        fault, not a feature */
     try{audioBus.stop()}catch(e){}
     this._playing=v;this._note="";
-    mode="full";render();
+    mode="full";render();this._wire(ctx);
+  },
+  /* ---- resume where you stopped ----
+     Positions are kept per video id in card storage, so they ride
+     config.json and survive a wipe. Only worth remembering in the middle:
+     under a minute in there is nothing to resume, and near the end you have
+     finished and want the next thing, not the credits again. */
+  _RESUME_MIN:60, _RESUME_END:0.97,
+  _positions(ctx){
+    const p=ctx.storage.get("pos",{});
+    return (p&&typeof p==="object")?p:{};
+  },
+  _savePos(ctx,id,t,dur){
+    if(!id||!isFinite(t)||!isFinite(dur)||dur<=0)return;
+    const p=this._positions(ctx);
+    if(t<this._RESUME_MIN||t/dur>this._RESUME_END)delete p[id];
+    else p[id]=Math.round(t);
+    /* a library gets browsed for years; keep the map from growing without
+       bound by dropping the oldest entries once it is large */
+    const keys=Object.keys(p);
+    if(keys.length>120)keys.slice(0,keys.length-120).forEach(k=>delete p[k]);
+    ctx.storage.set("pos",p);
+  },
+  /* Wire the element after it exists. render() returns a string, so the
+     listeners cannot be attached inside it. */
+  _wire(ctx){
+    setTimeout(()=>{
+      const el=document.getElementById("vid-el");
+      const v=this._playing;
+      if(!el||!v||el._wired)return;
+      el._wired=true;
+      const saved=this._positions(ctx)[v.id];
+      el.addEventListener("loadedmetadata",()=>{
+        if(saved&&isFinite(el.duration)&&saved<el.duration*this._RESUME_END){
+          try{el.currentTime=saved}catch(e){}
+          const osd=document.getElementById("vid-osd");
+          if(osd){
+            osd.textContent="resumed "+this._dur(saved*1000)+
+              "   ▲ or ◂ to go back";
+            osd.style.opacity="1";
+            clearTimeout(this._flashT);
+            this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}
+              catch(e){}},2600);
+          }
+        }
+      });
+      let last=0;
+      el.addEventListener("timeupdate",()=>{
+        const now=Date.now();
+        if(now-last<5000)return;          /* five seconds is plenty */
+        last=now;
+        this._savePos(ctx,v.id,el.currentTime||0,el.duration||0);
+      });
+      el.addEventListener("ended",()=>{
+        const p=this._positions(ctx);delete p[v.id];ctx.storage.set("pos",p);
+        this._stop();render();
+      });
+    },0);
   },
   /* Seek, and say so on screen. A jump on a long file takes a moment to
      re-buffer, and with no feedback that is indistinguishable from the app
@@ -2650,15 +2714,24 @@ const cardVideo={
         this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}catch(e){}},1600);}
     }catch(e){}
   },
-  _stop(){
+  _stop(ctx){
     const el=document.getElementById("vid-el");
-    if(el){try{el.pause();el.removeAttribute("src");el.load()}catch(e){}}
+    if(el){
+      /* record before tearing down - stopping mid-film is precisely when
+         the position matters most */
+      try{
+        if(ctx&&this._playing)
+          this._savePos(ctx,this._playing.id,el.currentTime||0,
+            el.duration||0);
+      }catch(e){}
+      try{el.pause();el.removeAttribute("src");el.load()}catch(e){}
+    }
     clearTimeout(this._flashT);
     this._playing=null;
   },
   /* Climb, skipping on the way up exactly the levels skipped coming down */
   _up(ctx){
-    if(this._playing){this._stop();render();return true}
+    if(this._playing){this._stop(ctx);render();return true}
     const solo=this._folders().length===1;
     if(this._level==="files"){
       if(this._seasons(this._dir).length>1){
@@ -2771,7 +2844,7 @@ const cardVideo={
   },
   onPick(ctx,i){this.sel=i;this._enter(ctx)},
   onToggle(ctx){
-    if(this._playing){this._stop();render();return}
+    if(this._playing){this._stop(ctx);render();return}
     stageId="video";mode="full";render();
   }
 };
