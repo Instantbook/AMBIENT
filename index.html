@@ -239,6 +239,7 @@ input[type=text]:focus{border-color:var(--accent)}
     <div class="rail rail-v" id="rail-left"></div>
     <div id="stage-wrap"><section id="stage">
       <h2><span id="stage-title"></span><span id="stage-status">
+        <span id="st-pos"></span>
         <span id="st-link"></span><span id="st-audio"></span>
         <span id="net"></span><span id="st-full"></span></span></h2>
       <div class="body" id="stage-body"></div>
@@ -261,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v62";
+const APP_VERSION="v63";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -960,6 +961,16 @@ function render(){
     focusTile();
   }
 }
+/* How many list rows fit on the stage right now. Measured rather than
+   assumed: the same list is 4 rows tall windowed and ~12 fullscreen, and
+   a page jump that does not match what you can see is disorienting. */
+function pageRows(){
+  const b=document.getElementById("stage-body");
+  const r=b&&b.querySelector("[data-row]");
+  if(!b||!r)return 10;
+  const h=r.getBoundingClientRect().height||39;
+  return Math.max(4,Math.floor(b.clientHeight/h)-1);
+}
 function renderCard(card){
   /* stage body if this card is the one loaded in the main window */
   if(mode!=="overview"&&stagedIs(card)){
@@ -987,6 +998,15 @@ function renderCard(card){
     const cur=host.querySelector(".sel");
     if(cur&&cur.scrollIntoView){
       try{cur.scrollIntoView({block:"nearest"})}catch(e){}
+    }
+    /* Where am I in this list? With four rows visible and hundreds of
+       them, a scrollbar the stage does not draw is not an answer; the
+       count is. Blank for cards that are not lists. */
+    const pos=document.getElementById("st-pos");
+    if(pos){
+      const rows=host.querySelectorAll("[data-row]");
+      pos.textContent=rows.length>1&&cur
+        ?(+cur.getAttribute("data-row")+1)+"/"+rows.length:"";
     }
   }
   /* refresh this card's tile wherever it appears */
@@ -1097,9 +1117,13 @@ document.addEventListener("focusin",e=>{
 function openCard(c){
   if(!c)return;
   if(c._active===false)c._active=true;
-  if(mode==="overview"){stageId=c.id;focusSel(c.id);mode="stage"}
+  /* A card that browses a long list opens straight to fullscreen. The
+     windowed stage is 187px tall on this device — four rows — which is
+     fine for a weather readout and useless for eight thousand tracks. */
+  if(mode==="overview"){stageId=c.id;focusSel(c.id);
+    mode=c.prefersFull?"full":"stage"}
   else if(c.id===stageId)mode="full";
-  else{stageId=c.id;focusSel(c.id);mode="stage"}
+  else{stageId=c.id;focusSel(c.id);mode=c.prefersFull?"full":"stage"}
   render();
 }
 document.addEventListener("click",e=>{
@@ -1658,7 +1682,7 @@ const RADIO_CITIES=[
 ];
 
 const cardRadio={
-  id:"radio",title:"RADIO",icon:"radio",
+  id:"radio",title:"RADIO",icon:"radio",prefersFull:true,
   pane:"listen",size:"large",order:50,refresh:3600,offline:"local-first",
   /* home | genres | cities | stations */
   _level:"home",_path:"",_pathLabel:"",_busy:false,_err:"",
@@ -2243,7 +2267,7 @@ const cardLaunch={
    Without the wrapper there is no filesystem to read, and the card says so
    rather than pretending to be empty. */
 const cardMusic={
-  id:"music",title:"MUSIC",icon:"note",
+  id:"music",title:"MUSIC",icon:"note",prefersFull:true,
   pane:"listen",size:"large",order:52,refresh:null,offline:"local-first",
   sel:0,_tracks:null,
   /* A flat list does not survive a real library - 100 albums is a thousand
@@ -2460,6 +2484,16 @@ const cardMusic={
     if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();return true}
     if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
     if(k==="enter"){this._enter(ctx);return true}
+    /* Several hundred artists cannot be walked a row at a time. In a
+       browse level ◄► jump a screenful; at the track level they stay
+       transport, because that is the only level with a timeline. */
+    if((k==="left"||k==="right")&&mode==="full"
+       &&this._level!=="tracks"&&rows.length>pageRows()){
+      const step=pageRows()*(held?2:1);
+      this.sel=Math.max(0,Math.min(rows.length-1,
+        this.sel+(k==="left"?-step:step)));
+      ctx.rerender();return true;
+    }
     /* Scrubbing is FULLSCREEN ONLY. In the windowed list ◄► have to keep
        meaning "leave this card": taking them for transport turned the card
        into a trap, because the way out people actually reach for silently
@@ -2511,7 +2545,7 @@ const cardMusic={
 const VIDEO_OK=/^video\/(mp4|webm|ogg|x-m4v|quicktime)$/i;
 
 const cardVideo={
-  id:"video",title:"VIDEO",icon:"wave",
+  id:"video",title:"VIDEO",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
   sel:0,_items:null,_level:"folders",_dir:null,_season:null,
   _playing:null,_note:"",_flash:"",_flashT:null,_ctx:null,
@@ -2843,6 +2877,14 @@ const cardVideo={
     if(k==="up"&&this.sel>0){this.sel--;this._note="";ctx.rerender();
       return true}
     if(k==="enter"){this._enter(ctx);return true}
+    /* Same page jump as MUSIC. There is no video playing here — that
+       branch returned above — so ◄► carry no transport meaning yet. */
+    if((k==="left"||k==="right")&&mode==="full"&&rows.length>pageRows()){
+      const step=pageRows()*(held?2:1);
+      this.sel=Math.max(0,Math.min(rows.length-1,
+        this.sel+(k==="left"?-step:step)));
+      this._note="";ctx.rerender();return true;
+    }
     return false;
   },
   onPick(ctx,i){this.sel=i;this._enter(ctx)},

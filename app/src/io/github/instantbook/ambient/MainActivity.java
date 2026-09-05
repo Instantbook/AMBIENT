@@ -149,7 +149,10 @@ public class MainActivity extends Activity {
                         MediaStore.Audio.Media.TRACK);
                 boolean first = true;
                 int n = 0;
-                while (c != null && c.moveToNext() && n < 500) {
+                // 500 was an arbitrary guard that became a silent ceiling:
+                // a real library hits it and the rest of the collection is
+                // simply invisible, with nothing on screen to say so.
+                while (c != null && c.moveToNext() && n < 20000) {
                     n++;
                     if (!first) b.append(",");
                     first = false;
@@ -213,7 +216,7 @@ public class MainActivity extends Activity {
                         MediaStore.Video.Media.DISPLAY_NAME);
                 boolean first = true;
                 int n = 0;
-                while (c != null && c.moveToNext() && n < 500) {
+                while (c != null && c.moveToNext() && n < 20000) {
                     n++;
                     if (!first) b.append(",");
                     first = false;
@@ -421,6 +424,70 @@ public class MainActivity extends Activity {
        same-scheme AND analysable - local tracks drive the real FFT exactly
        like the CORS-clean radio streams do. */
     private static final String MEDIA_HOST = "https://ambient.local/media";
+
+    /**
+     * Spatial navigation for sites opened by LAUNCH.
+     *
+     * The WebView gives a page arrow keys as plain scrolling and nothing
+     * else - there is no focus ring and no way to choose a link, so a
+     * streaming site can be scrolled through and never used. Chromium has
+     * spatial navigation built in but it cannot be switched on from here,
+     * so this supplies it: arrows move a visible highlight to the nearest
+     * clickable thing in that direction, OK activates it.
+     *
+     * Deliberately small and defensive - it runs on somebody else's page.
+     */
+    private static final String SPATIAL_NAV =
+        "(function(){\n" +
+        "if(window.__ambientNav)return;window.__ambientNav=1;\n" +
+        "var S='a[href],button,input,select,textarea,[onclick],[role=button],'+\n" +
+        "  '[role=link],[tabindex]:not([tabindex=\"-1\"]),video';\n" +
+        "var st=document.createElement('style');\n" +
+        "st.textContent='.__ambsel{outline:3px solid #6cf!important;'+\n" +
+        "  'outline-offset:2px!important;scroll-margin:120px!important}';\n" +
+        "document.documentElement.appendChild(st);\n" +
+        "var cur=null;\n" +
+        "function vis(e){var r=e.getBoundingClientRect();\n" +
+        "  if(r.width<8||r.height<8)return false;\n" +
+        "  var s=getComputedStyle(e);\n" +
+        "  return s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0';}\n" +
+        "function all(){return [].slice.call(document.querySelectorAll(S))\n" +
+        "  .filter(vis);}\n" +
+        "function box(e){var r=e.getBoundingClientRect();\n" +
+        "  return{x:r.left+r.width/2,y:r.top+r.height/2,r:r};}\n" +
+        "function mark(e){if(cur)cur.classList.remove('__ambsel');\n" +
+        "  cur=e;if(!e)return;e.classList.add('__ambsel');\n" +
+        "  try{e.focus({preventScroll:true})}catch(_){}\n" +
+        "  try{e.scrollIntoView({block:'center',inline:'nearest'})}catch(_){}}\n" +
+        "function move(dir){var els=all();if(!els.length)return false;\n" +
+        "  if(!cur||els.indexOf(cur)<0){mark(els[0]);return true;}\n" +
+        "  var c=box(cur),best=null,bd=1e9;\n" +
+        "  for(var i=0;i<els.length;i++){var e=els[i];if(e===cur)continue;\n" +
+        "    var b=box(e),dx=b.x-c.x,dy=b.y-c.y;\n" +
+        "    var fwd=dir==='right'?dx:dir==='left'?-dx:dir==='down'?dy:-dy;\n" +
+        "    if(fwd<=1)continue;\n" +
+        "    var off=(dir==='left'||dir==='right')?Math.abs(dy):Math.abs(dx);\n" +
+        "    var d=fwd+off*2;\n" +      // straight ahead beats diagonal
+        "    if(d<bd){bd=d;best=e;}}\n" +
+        "  if(best){mark(best);return true;}return false;}\n" +
+        "function activate(){if(!cur)return false;\n" +
+        "  try{cur.click()}catch(_){}\n" +
+        "  return true;}\n" +
+        "document.addEventListener('keydown',function(ev){\n" +
+        "  var k=ev.key,d=null;\n" +
+        "  if(k==='ArrowRight')d='right';else if(k==='ArrowLeft')d='left';\n" +
+        "  else if(k==='ArrowDown')d='down';else if(k==='ArrowUp')d='up';\n" +
+        "  if(d){\n" +
+        "    var t=ev.target;\n" +
+        "    if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))return;\n" +
+        "    if(move(d)){ev.preventDefault();ev.stopPropagation();}\n" +
+        // nothing further that way: let the page scroll as before
+        "    return;}\n" +
+        "  if(k==='Enter'){if(activate()){ev.preventDefault();}}\n" +
+        "},true);\n" +
+        "setTimeout(function(){if(!cur)move('down')},400);\n" +
+        "})();";
+
 
     private File[] mediaRoots() {
         java.util.List<File> out = new java.util.ArrayList<File>();
@@ -676,6 +743,20 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView v, String url, android.graphics.Bitmap f) {
                 atAmbient = url == null || url.startsWith(URL);
                 super.onPageStarted(v, url, f);
+            }
+
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                super.onPageFinished(v, url);
+                // A launched site gets arrow keys as SCROLLING and nothing
+                // else: the WebView has no spatial navigation, so links can
+                // be scrolled past but never chosen. This injects the
+                // missing half - arrows move a highlight between clickable
+                // things, OK activates one.
+                if (!atAmbient) {
+                    try { v.evaluateJavascript(SPATIAL_NAV, null); }
+                    catch (Throwable ignored) {}
+                }
             }
 
             @Override
