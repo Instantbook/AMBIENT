@@ -261,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v61";
+const APP_VERSION="v62";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2673,8 +2673,7 @@ const cardVideo={
           try{el.currentTime=saved}catch(e){}
           const osd=document.getElementById("vid-osd");
           if(osd){
-            osd.textContent="resumed "+this._dur(saved*1000)+
-              "   ▲ or ◂ to go back";
+            osd.textContent="resumed "+this._dur(saved*1000)+"   ◄ back 5 min";
             osd.style.opacity="1";
             clearTimeout(this._flashT);
             this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}
@@ -2793,6 +2792,8 @@ const cardVideo={
     (this._level==="files"?"play":"open")+
     " · ◄► back to tiles · BACK "+
     (this._playing?"stop":this._level!=="folders"?"up a level":"to tiles")+
+    "<br>playing: ◄► jump 5 min · ▲▼ 30s · "+
+    "OK pause · BACK stop"+
     "<br>amber = this device can play it but the cockpit cannot; "+
     "OK hands it to the system player</div>";
   },
@@ -2814,16 +2815,18 @@ const cardVideo={
         try{el.paused?el.play():el.pause()}catch(e){}
         return true;
       }
-      /* Two scales, because one is never enough on a long file. A three
-         hour compilation needs coarse jumps to be navigable at all, and a
-         30s nudge is what you want for a missed line - ±10s, as MUSIC uses,
-         is nearly useless at that length.
-         ▲▼ are free here: there is no list behind a playing video. */
+      /* The timeline runs left to right, so ◄► are the jumps: ► is ahead
+         five minutes, which is what makes a three hour file navigable at
+         all. ▲▼ are the fine nudge for a missed line, and they are free
+         here because there is no list behind a playing video.
+         Putting the coarse jump on ▲ instead read as a fault rather than a
+         control: five minutes back from two minutes in clamps to zero, and
+         a video starting over is indistinguishable from a crash. */
       if(el){
-        const step=(k==="left"||k==="right")?30
-          :(k==="up"||k==="down")?300:0;
+        const step=(k==="left"||k==="right")?300
+          :(k==="up"||k==="down")?30:0;
         if(step){
-          const dir=(k==="left"||k==="up")?-1:1;
+          const dir=(k==="left"||k==="down")?-1:1;
           this._seek(el,dir*step*(held?2:1));
           return true;
         }
