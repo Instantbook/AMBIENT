@@ -201,9 +201,15 @@ public class MainActivity extends Activity {
                         MediaStore.Video.Media.HEIGHT,
                         MediaStore.Video.Media.SIZE,
                         MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
-                        MediaStore.Video.Media.TITLE},
+                        MediaStore.Video.Media.TITLE,
+                        // The bucket is only the LAST folder, so a series
+                        // arrives as "Season 1" with the show's name thrown
+                        // away - and two shows would both be "Season 1" and
+                        // merge. The relative path keeps the whole shape:
+                        // "Movies/The B in Apartment 23/Season 1/".
+                        MediaStore.Video.Media.RELATIVE_PATH},
                         null, null,
-                        MediaStore.Video.Media.BUCKET_DISPLAY_NAME + "," +
+                        MediaStore.Video.Media.RELATIVE_PATH + "," +
                         MediaStore.Video.Media.DISPLAY_NAME);
                 boolean first = true;
                 int n = 0;
@@ -219,6 +225,7 @@ public class MainActivity extends Activity {
                      .append(",\"name\":\"").append(jesc(String.valueOf(title)))
                      .append("\",\"file\":\"").append(jesc(String.valueOf(c.getString(1))))
                      .append("\",\"dir\":\"").append(jesc(dir == null ? "" : dir))
+                     .append("\",\"path\":\"").append(jesc(String.valueOf(c.getString(9))))
                      .append("\",\"mime\":\"").append(jesc(String.valueOf(c.getString(3))))
                      .append("\",\"dur\":").append(c.getLong(2))
                      .append(",\"w\":").append(c.getInt(4))

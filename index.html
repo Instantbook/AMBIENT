@@ -261,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v58";
+const APP_VERSION="v59";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2512,7 +2512,8 @@ const VIDEO_OK=/^video\/(mp4|webm|ogg|x-m4v|quicktime)$/i;
 const cardVideo={
   id:"video",title:"VIDEO",icon:"wave",
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
-  sel:0,_items:null,_level:"folders",_dir:null,_playing:null,_note:"",
+  sel:0,_items:null,_level:"folders",_dir:null,_season:null,
+  _playing:null,_note:"",
   /* Immersive only while something is actually playing. The shell reads
      this at render time, so it can change: the browse list wants the frame
      and its hints, a playing video wants the whole panel and nothing else
@@ -2528,15 +2529,45 @@ const cardVideo={
     try{ctx.rerender()}catch(e){}
   },
   _all(){return Array.isArray(this._items)?this._items:[]},
+  /* MediaStore's bucket is only the deepest folder, so a series arrives as
+     "Season 1" with the show's name discarded - and a second show would
+     land in the same "Season 1". The relative path carries the real shape,
+     so browsing is show -> season -> episode, exactly like artist -> album
+     -> track. Top-level media roots are stripped: "Movies" and "Podcasts"
+     are where Android files things, not what anything is called. */
+  _ROOTS:["movies","podcasts","video","videos","dcim","camera","download",
+          "downloads","media"],
+  _parts(v){
+    const raw=String(v&&v.path||"").replace(/^\/+|\/+$/g,"");
+    let segs=raw?raw.split("/").filter(Boolean):[];
+    if(segs.length&&this._ROOTS.indexOf(segs[0].toLowerCase())>=0)segs=segs.slice(1);
+    const show=segs[0]||v.dir||"Video";
+    const season=segs.length>1?segs[segs.length-1]:"";
+    return {show,season};
+  },
   _folders(){
     const seen=[];
     this._all().forEach(v=>{
-      const d=v.dir||"Video";
-      if(seen.indexOf(d)<0)seen.push(d);
+      const s=this._parts(v).show;
+      if(seen.indexOf(s)<0)seen.push(s);
     });
     return seen.sort((a,b)=>a.localeCompare(b));
   },
-  _inDir(d){return this._all().filter(v=>(v.dir||"Video")===d)},
+  _seasons(show){
+    const seen=[];
+    this._all().forEach(v=>{
+      const p=this._parts(v);
+      if(p.show!==show||!p.season)return;
+      if(seen.indexOf(p.season)<0)seen.push(p.season);
+    });
+    return seen.sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+  },
+  _inDir(show,season){
+    return this._all().filter(v=>{
+      const p=this._parts(v);
+      return p.show===show&&(season==null||season===""||p.season===season);
+    });
+  },
   _playable(v){return VIDEO_OK.test(String(v&&v.mime||""))},
   _url(v){
     let base="";try{base=hostBridge.mediaBase()}catch(e){}
@@ -2550,24 +2581,39 @@ const cardVideo={
   },
   _rows(){
     if(this._level==="folders")
-      return this._folders().map(d=>({label:d,
-        meta:this._inDir(d).length+" videos",dir:d}));
-    return this._inDir(this._dir).map(v=>({
+      return this._folders().map(d=>{
+        const ss=this._seasons(d);
+        return {label:d,dir:d,
+          meta:ss.length>1?ss.length+" seasons"
+            :this._inDir(d).length+" videos"};
+      });
+    if(this._level==="seasons")
+      return this._seasons(this._dir).map(s=>({label:s,season:s,
+        meta:this._inDir(this._dir,s).length+" videos"}));
+    return this._inDir(this._dir,this._season).map(v=>({
       label:v.name||v.file||"video",
       meta:this._dur(v.dur)+(this._playable(v)?"":" · external"),
       video:v}));
   },
+  _openShow(show){
+    /* one season is not a menu, same rule as MUSIC's single album */
+    const ss=this._seasons(show);
+    this._dir=show;
+    if(ss.length>1){this._level="seasons";this._season=null}
+    else{this._level="files";this._season=ss[0]||""}
+    this.sel=0;
+  },
   _top(){
     const f=this._folders();
-    /* one folder is not a menu, same rule as MUSIC */
-    if(f.length===1){this._dir=f[0];this._level="files"}
-    else{this._dir=null;this._level="folders"}
+    if(f.length===1)this._openShow(f[0]);
+    else{this._dir=null;this._season=null;this._level="folders"}
     this.sel=0;
   },
   _enter(ctx){
     const r=this._rows()[this.sel];
     if(!r)return;
-    if(r.dir){this._dir=r.dir;this._level="files";this.sel=0;
+    if(r.dir){this._openShow(r.dir);ctx.rerender();return}
+    if(r.season){this._season=r.season;this._level="files";this.sel=0;
       ctx.rerender();return}
     const v=r.video;
     if(!this._playable(v)){
@@ -2590,9 +2636,21 @@ const cardVideo={
     if(el){try{el.pause()}catch(e){}}
     this._playing=null;
   },
+  /* Climb, skipping on the way up exactly the levels skipped coming down */
   _up(ctx){
     if(this._playing){this._stop();render();return true}
-    if(this._level==="files"&&this._folders().length>1){
+    const solo=this._folders().length===1;
+    if(this._level==="files"){
+      if(this._seasons(this._dir).length>1){
+        this._level="seasons";this._season=null;this.sel=0;
+        ctx.rerender();return true;
+      }
+      if(solo)return false;              /* both tiers skipped: at the top */
+      this._level="folders";this._dir=null;this._season=null;this.sel=0;
+      ctx.rerender();return true;
+    }
+    if(this._level==="seasons"){
+      if(solo)return false;
       this._level="folders";this._dir=null;this.sel=0;ctx.rerender();
       return true;
     }
@@ -2614,26 +2672,28 @@ const cardVideo={
         "Anything on internal storage or the card is picked up once Android "+
         "has indexed it.<br><br>OK rescans.</div>";
     const rows=this._rows();
-    const head=this._level==="files"
-      ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
-       "font-size:15px'>"+esc(this._dir||"")+"</div><div class='lbl'>"+
-       rows.length+" videos</div></div>":"";
+    const head=this._level==="folders"?""
+      :"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>"+esc(this._dir||"")+
+       (this._level==="files"&&this._season?
+         " <span class='lbl'>· "+esc(this._season)+"</span>":"")+
+       "</div><div class='lbl'>"+rows.length+
+       (this._level==="seasons"?" seasons":" videos")+"</div></div>";
     return head+rows.map((r,i)=>{
       const ext=r.video&&!this._playable(r.video);
       return "<div class='row"+(i===this.sel?" hl sel":"")+
         "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+esc(r.label)+
-        (r.dir?" ›":"")+"</span>"+
+        (r.dir||r.season?" ›":"")+"</span>"+
         "<span class='lbl' style='font-size:12px"+
         (ext?";color:var(--warn)":"")+"'>"+esc(r.meta)+"</span></div>";
     }).join("")+
     (this._note?"<div class='state' style='margin-top:8px;"+
       "color:var(--warn)'>"+esc(this._note)+"</div>":"")+
     "<div class='state' style='margin-top:10px'>▲▼ choose · OK "+
-    (this._level==="folders"?"open":"play")+
+    (this._level==="files"?"play":"open")+
     " · ◄► back to tiles · BACK "+
-    (this._playing?"stop":this._level==="files"&&this._folders().length>1
-      ?"up a level":"to tiles")+
+    (this._playing?"stop":this._level!=="folders"?"up a level":"to tiles")+
     "<br>amber = this device can play it but the cockpit cannot; "+
     "OK hands it to the system player</div>";
   },
