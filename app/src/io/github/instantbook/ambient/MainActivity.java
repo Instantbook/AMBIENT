@@ -485,22 +485,16 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * A real seek to `start`, and a stream that stops after `end`.
+     * The whole file, with a skip() that actually seeks.
      *
-     * This used to open the content:// stream and call skip() in a loop.
-     * skip() on that stream is a read-and-discard, not a seek, so serving a
-     * range near the end of a file meant reading everything before it off
-     * the card first. At 270 MB an episode that was merely slow; on a 2.9 GB
-     * film it read gigabytes before the first byte and looked like a freeze.
-     * Chromium ALWAYS does this on an mp4 whose moov index sits at the end,
-     * which is most files not written with faststart - so it hit the largest
-     * files hardest, which is exactly backwards.
-     *
-     * A ParcelFileDescriptor gives a real FileChannel, so position() is
-     * O(1) whatever the offset. The bound matters too: the old code declared
-     * Content-Length but handed back a stream that ran to EOF.
+     * The WebView asks for byte ranges by calling skip() on this stream.
+     * InputStream.skip() reads and discards by default, so a seek an hour
+     * into a 2.7GB film would have read a gigabyte off the card first -
+     * which is what "it freezes when I start playing" turned out to be
+     * once ranging moved back to where it belongs. A FileChannel position
+     * is O(1) at any offset.
      */
-    private InputStream sliceOf(Uri item, final long start, final long end) {
+    private InputStream fullStream(Uri item) {
         android.os.ParcelFileDescriptor pfd = null;
         try {
             pfd = getContentResolver().openFileDescriptor(item, "r");
@@ -508,26 +502,25 @@ public class MainActivity extends Activity {
             final android.os.ParcelFileDescriptor held = pfd;
             final FileInputStream fis =
                     new FileInputStream(pfd.getFileDescriptor());
-            fis.getChannel().position(start);
-            final long total = end - start + 1;
             return new InputStream() {
-                private long left = total;
                 @Override public int read() throws java.io.IOException {
-                    if (left <= 0) return -1;
-                    int b = fis.read();
-                    if (b >= 0) left--;
-                    return b;
+                    return fis.read();
                 }
                 @Override public int read(byte[] b, int off, int len)
                         throws java.io.IOException {
-                    if (left <= 0) return -1;
-                    if (len > left) len = (int) left;
-                    int n = fis.read(b, off, len);
-                    if (n > 0) left -= n;
-                    return n;
+                    return fis.read(b, off, len);
+                }
+                @Override public long skip(long n) throws java.io.IOException {
+                    if (n <= 0) return 0;
+                    java.nio.channels.FileChannel ch = fis.getChannel();
+                    long pos = ch.position(), size = ch.size();
+                    long target = Math.min(size, pos + n);
+                    ch.position(target);
+                    return target - pos;
                 }
                 @Override public int available() throws java.io.IOException {
-                    long a = Math.min(left, fis.available());
+                    java.nio.channels.FileChannel ch = fis.getChannel();
+                    long a = ch.size() - ch.position();
                     return a > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) a;
                 }
                 @Override public void close() throws java.io.IOException {
@@ -583,11 +576,31 @@ public class MainActivity extends Activity {
             Map<String, String> h = new HashMap<String, String>();
             h.put("Access-Control-Allow-Origin", "*");   // makes the FFT work
             h.put("Accept-Ranges", "bytes");
-            long start = 0, end = len - 1;
 
-            // Chromium range-requests media; without 206 support seeking
-            // fails and some containers refuse to start at all.
+            /* Hand back the WHOLE resource and set no length.
+             *
+             * The WebView does its own range handling on an intercepted
+             * response - it slices the stream and injects the correct
+             * Content-Length itself. Anything set here is appended as a
+             * SECOND value, and Chromium aborts a response whose
+             * Content-Length contradicts itself. That is what every failed
+             * seek was: "Content-Length: 152030935, 277597911".
+             *
+             * Serving a pre-sliced 206 was worse - the range then got
+             * applied twice, once by this code and again by the WebView,
+             * giving "26463959" for a 152MB body. The rule is simply that
+             * ranging is not ours to do; the stream's skip() below makes
+             * the WebView's own seek O(1).
+             */
+            InputStream in = fullStream(item);
+            if (in == null) return null;
+            /* A ranged request needs the 206 status and a Content-Range -
+               answering 200 tells Chromium the range was ignored, and it
+               aborts because the body then does not start where it asked.
+               The BODY, though, stays whole: the WebView slices it itself
+               (via the seeking skip() above) and computes the length. */
             if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                long start = 0, end = len - 1;
                 String[] parts = rangeHeader.substring(6).split("-");
                 try {
                     if (parts.length > 0 && parts[0].length() > 0)
@@ -597,18 +610,12 @@ public class MainActivity extends Activity {
                 } catch (Throwable ignored) {}
                 if (start < 0 || start >= len) start = 0;
                 if (end < start || end >= len) end = len - 1;
-                InputStream in = sliceOf(item, start, end);
-                if (in == null) return null;
-                h.put("Content-Range", "bytes " + start + "-" + end + "/" + len);
-                h.put("Content-Length", String.valueOf(end - start + 1));
-                return new WebResourceResponse(mime, null,
-                        206, "Partial Content", h, in);
+                h.put("Content-Range",
+                        "bytes " + start + "-" + end + "/" + len);
+                return new WebResourceResponse(mime, null, 206,
+                        "Partial Content", h, in);
             }
-            h.put("Content-Length", String.valueOf(len));
-            InputStream in = sliceOf(item, 0, len - 1);
-            if (in == null) return null;
-            return new WebResourceResponse(mime, null,
-                    200, "OK", h, in);
+            return new WebResourceResponse(mime, null, 200, "OK", h, in);
         } catch (Throwable t) {
             return new WebResourceResponse("text/plain", "UTF-8", 404,
                     "Not Found", new HashMap<String, String>(),
