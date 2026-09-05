@@ -484,6 +484,62 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    /**
+     * A real seek to `start`, and a stream that stops after `end`.
+     *
+     * This used to open the content:// stream and call skip() in a loop.
+     * skip() on that stream is a read-and-discard, not a seek, so serving a
+     * range near the end of a file meant reading everything before it off
+     * the card first. At 270 MB an episode that was merely slow; on a 2.9 GB
+     * film it read gigabytes before the first byte and looked like a freeze.
+     * Chromium ALWAYS does this on an mp4 whose moov index sits at the end,
+     * which is most files not written with faststart - so it hit the largest
+     * files hardest, which is exactly backwards.
+     *
+     * A ParcelFileDescriptor gives a real FileChannel, so position() is
+     * O(1) whatever the offset. The bound matters too: the old code declared
+     * Content-Length but handed back a stream that ran to EOF.
+     */
+    private InputStream sliceOf(Uri item, final long start, final long end) {
+        android.os.ParcelFileDescriptor pfd = null;
+        try {
+            pfd = getContentResolver().openFileDescriptor(item, "r");
+            if (pfd == null) return null;
+            final android.os.ParcelFileDescriptor held = pfd;
+            final FileInputStream fis =
+                    new FileInputStream(pfd.getFileDescriptor());
+            fis.getChannel().position(start);
+            final long total = end - start + 1;
+            return new InputStream() {
+                private long left = total;
+                @Override public int read() throws java.io.IOException {
+                    if (left <= 0) return -1;
+                    int b = fis.read();
+                    if (b >= 0) left--;
+                    return b;
+                }
+                @Override public int read(byte[] b, int off, int len)
+                        throws java.io.IOException {
+                    if (left <= 0) return -1;
+                    if (len > left) len = (int) left;
+                    int n = fis.read(b, off, len);
+                    if (n > 0) left -= n;
+                    return n;
+                }
+                @Override public int available() throws java.io.IOException {
+                    long a = Math.min(left, fis.available());
+                    return a > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) a;
+                }
+                @Override public void close() throws java.io.IOException {
+                    try { fis.close(); } finally { held.close(); }
+                }
+            };
+        } catch (Throwable t) {
+            try { if (pfd != null) pfd.close(); } catch (Throwable ignored) {}
+            return null;
+        }
+    }
+
     private WebResourceResponse serveMedia(String url, String rangeHeader) {
         try {
             // ?id= is a track, ?vid= is a video. They live in different
@@ -541,21 +597,15 @@ public class MainActivity extends Activity {
                 } catch (Throwable ignored) {}
                 if (start < 0 || start >= len) start = 0;
                 if (end < start || end >= len) end = len - 1;
-                InputStream in = getContentResolver().openInputStream(item);
+                InputStream in = sliceOf(item, start, end);
                 if (in == null) return null;
-                long skipped = 0;
-                while (skipped < start) {
-                    long n = in.skip(start - skipped);
-                    if (n <= 0) break;
-                    skipped += n;
-                }
                 h.put("Content-Range", "bytes " + start + "-" + end + "/" + len);
                 h.put("Content-Length", String.valueOf(end - start + 1));
                 return new WebResourceResponse(mime, null,
                         206, "Partial Content", h, in);
             }
             h.put("Content-Length", String.valueOf(len));
-            InputStream in = getContentResolver().openInputStream(item);
+            InputStream in = sliceOf(item, 0, len - 1);
             if (in == null) return null;
             return new WebResourceResponse(mime, null,
                     200, "OK", h, in);
@@ -583,6 +633,13 @@ public class MainActivity extends Activity {
         // own screensaver settings rather than leaving them disabled.
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+        // Makes the page inspectable from Chrome on a tethered computer
+        // (chrome://inspect). Without it, diagnosing anything inside the
+        // WebView is guesswork from the outside - which is how a stalled
+        // video stayed a theory instead of a measurement. This is a
+        // sideloaded debug build; there is nothing here worth hiding.
+        try { WebView.setWebContentsDebuggingEnabled(true); }
+        catch (Throwable ignored) {}
         web = new WebView(this);
         web.setBackgroundColor(0xFF000000);
 

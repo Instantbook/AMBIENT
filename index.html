@@ -261,7 +261,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v59";
+const APP_VERSION="v60";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2513,7 +2513,7 @@ const cardVideo={
   id:"video",title:"VIDEO",icon:"wave",
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
   sel:0,_items:null,_level:"folders",_dir:null,_season:null,
-  _playing:null,_note:"",
+  _playing:null,_note:"",_flash:"",_flashT:null,
   /* Immersive only while something is actually playing. The shell reads
      this at render time, so it can change: the browse list wants the frame
      and its hints, a playing video wants the whole panel and nothing else
@@ -2631,9 +2631,29 @@ const cardVideo={
     this._playing=v;this._note="";
     mode="full";render();
   },
+  /* Seek, and say so on screen. A jump on a long file takes a moment to
+     re-buffer, and with no feedback that is indistinguishable from the app
+     having hung - which is exactly how the freeze read. */
+  _seek(el,delta){
+    try{
+      const d=el.duration;
+      if(!(typeof d==="number"&&isFinite(d)&&d>0))return;
+      const t=Math.max(0,Math.min(d-1,(el.currentTime||0)+delta));
+      el.currentTime=t;
+      this._flash=(delta>0?"▸ ":"◂ ")+
+        (Math.abs(delta)>=60?Math.round(Math.abs(delta)/60)+" min"
+          :Math.abs(delta)+"s")+"   "+this._dur(t*1000)+" / "+
+        this._dur(d*1000);
+      clearTimeout(this._flashT);
+      const osd=document.getElementById("vid-osd");
+      if(osd){osd.textContent=this._flash;osd.style.opacity="1";
+        this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}catch(e){}},1600);}
+    }catch(e){}
+  },
   _stop(){
     const el=document.getElementById("vid-el");
-    if(el){try{el.pause()}catch(e){}}
+    if(el){try{el.pause();el.removeAttribute("src");el.load()}catch(e){}}
+    clearTimeout(this._flashT);
     this._playing=null;
   },
   /* Climb, skipping on the way up exactly the levels skipped coming down */
@@ -2663,9 +2683,15 @@ const cardVideo={
         "page has no filesystem to read.</div>";
     if(this._playing){
       const v=this._playing;
-      return "<video id='vid-el' src='"+esc(this._url(v))+"' autoplay "+
-        "playsinline style='width:100%;height:100%;object-fit:contain;"+
-        "background:#000'></video>";
+      return "<div style='position:relative;width:100%;height:100%'>"+
+        "<video id='vid-el' src='"+esc(this._url(v))+"' autoplay "+
+        "playsinline preload='auto' "+
+        "style='width:100%;height:100%;object-fit:contain;"+
+        "background:#000'></video>"+
+        "<div id='vid-osd' style='position:absolute;left:0;right:0;"+
+        "bottom:8%;text-align:center;font-family:var(--mono);font-size:15px;"+
+        "letter-spacing:.12em;color:#fff;text-shadow:0 0 6px #000;"+
+        "opacity:0;transition:opacity .25s'></div></div>";
     }
     if(!this._all().length)
       return "<div class='state'>No video in the media library yet. "+
@@ -2715,11 +2741,19 @@ const cardVideo={
         try{el.paused?el.play():el.pause()}catch(e){}
         return true;
       }
-      /* fullscreen is the only place these are free, same rule as MUSIC */
-      if((k==="left"||k==="right")&&el&&mode==="full"){
-        try{el.currentTime=Math.max(0,
-          (el.currentTime||0)+(k==="left"?-1:1)*(held?3:10))}catch(e){}
-        return true;
+      /* Two scales, because one is never enough on a long file. A three
+         hour compilation needs coarse jumps to be navigable at all, and a
+         30s nudge is what you want for a missed line - ±10s, as MUSIC uses,
+         is nearly useless at that length.
+         ▲▼ are free here: there is no list behind a playing video. */
+      if(el){
+        const step=(k==="left"||k==="right")?30
+          :(k==="up"||k==="down")?300:0;
+        if(step){
+          const dir=(k==="left"||k==="up")?-1:1;
+          this._seek(el,dir*step*(held?2:1));
+          return true;
+        }
       }
       return false;
     }
