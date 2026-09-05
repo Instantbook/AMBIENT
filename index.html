@@ -262,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v63";
+const APP_VERSION="v64";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -971,6 +971,24 @@ function pageRows(){
   const h=r.getBoundingClientRect().height||39;
   return Math.max(4,Math.floor(b.clientHeight/h)-1);
 }
+/* Render only the rows that can be seen. A card redraws its whole list on
+   every keypress, which is nothing at 40 rows and a visible freeze at 961 -
+   and everything past the fold was never on screen anyway. The window holds
+   its start until the selection comes within a few rows of an edge, so the
+   list scrolls under the highlight instead of jumping. Rows keep their
+   ABSOLUTE index in data-row, so onPick and the position readout still line
+   up with the real list. */
+function rowWindow(card,rows,sel){
+  const span=Math.max(12,pageRows()+8),pad=3;
+  const last=Math.max(0,rows.length-span);
+  let st=card._win|0;
+  if(sel<st+pad)st=sel-pad;
+  if(sel>st+span-1-pad)st=sel-span+1+pad;
+  st=Math.max(0,Math.min(last,st));
+  card._win=st;
+  card._winTotal=rows.length;
+  return{start:st,items:rows.slice(st,st+span)};
+}
 function renderCard(card){
   /* stage body if this card is the one loaded in the main window */
   if(mode!=="overview"&&stagedIs(card)){
@@ -1004,9 +1022,10 @@ function renderCard(card){
        count is. Blank for cards that are not lists. */
     const pos=document.getElementById("st-pos");
     if(pos){
-      const rows=host.querySelectorAll("[data-row]");
-      pos.textContent=rows.length>1&&cur
-        ?(+cur.getAttribute("data-row")+1)+"/"+rows.length:"";
+      const shown=host.querySelectorAll("[data-row]");
+      const total=card._winTotal||shown.length;
+      pos.textContent=total>1&&cur
+        ?(+cur.getAttribute("data-row")+1)+"/"+total:"";
     }
   }
   /* refresh this card's tile wherever it appears */
@@ -1836,7 +1855,9 @@ const cardRadio={
         (this._busy?"asking the relay…"
           :esc(this._err||"nothing here")+
            "<br><br>BACK to go up · OK to retry")+"</div>";
-    return head+rows.map((r,i)=>{
+    const w=rowWindow(this,rows,this.sel);
+    return head+w.items.map((r,j)=>{
+      const i=w.start+j;
       const st=r.station;
       const now=st&&cur&&cur.url===st.url;
       const bad=st&&ctx.audio.failed()===st.url;
@@ -2284,7 +2305,7 @@ const cardMusic={
       if(!cur||audioBus.paused()||mode==="overview")return;
       const st=staged();
       if(!st||st.id!==this.id)return;
-      if(this._all().some(t=>this._item(t).url===cur.url))renderCard(this);
+      if(this._owns())renderCard(this);
     },1000);
   },
   _scan(ctx){
@@ -2313,26 +2334,46 @@ const cardMusic={
     this.sel=0;
   },
   _all(){return Array.isArray(this._tracks)?this._tracks:[]},
-  _artists(){
-    const seen=[],out=[];
-    this._all().forEach(t=>{
-      const a=t.dir||"Unknown";
-      if(seen.indexOf(a)<0){seen.push(a);out.push(a)}
+  /* The library is indexed ONCE per load, not walked per row.
+     The previous shape was a scan of every track for each artist, plus a
+     linear seen.indexOf on every track - about eight million operations,
+     rebuilt on each keypress because _rows() redraws the whole list. At
+     500 tracks that was invisible; at 8000 it read as the list being
+     frozen. Keyed on the array identity, so a rescan rebuilds it and
+     nothing else has to remember to. */
+  _index(){
+    const all=this._all();
+    if(this._idx&&this._idx.src===all)return this._idx;
+    const byArtist=new Map();
+    all.forEach(t=>{
+      const a=t.dir||"Unknown",al=t.album||"Unknown";
+      let m=byArtist.get(a);
+      if(!m){m=new Map();byArtist.set(a,m)}
+      let ts=m.get(al);
+      if(!ts){ts=[];m.set(al,ts)}
+      ts.push(t);
     });
-    return out.sort((x,y)=>x.localeCompare(y));
+    const cmp=(x,y)=>x.localeCompare(y);
+    const artists=Array.from(byArtist.keys()).sort(cmp);
+    const albums=new Map();
+    byArtist.forEach((m,a)=>albums.set(a,Array.from(m.keys()).sort(cmp)));
+    this._idx={src:all,byArtist,artists,albums};
+    return this._idx;
   },
-  _albums(artist){
-    const seen=[];
-    this._all().forEach(t=>{
-      if((t.dir||"Unknown")!==artist)return;
-      const al=t.album||"Unknown";
-      if(seen.indexOf(al)<0)seen.push(al);
-    });
-    return seen.sort((x,y)=>x.localeCompare(y));
-  },
+  _artists(){return this._index().artists},
+  _albums(artist){return this._index().albums.get(artist)||[]},
   _tracksIn(artist,album){
-    return this._all().filter(t=>(t.dir||"Unknown")===artist&&
-      (t.album||"Unknown")===album);
+    const m=this._index().byArtist.get(artist);
+    return (m&&m.get(album))||[];
+  },
+  /* mediaBase() is a synchronous call across the JS bridge. _item() used
+     to make one per track, so a single "is this mine?" check fired eight
+     thousand JNI calls. It cannot change while the app is running. */
+  _base(){
+    if(this._baseUrl==null||this._baseUrl===undefined){
+      try{this._baseUrl=hostBridge.mediaBase()}catch(e){this._baseUrl=""}
+    }
+    return this._baseUrl;
   },
   /* what the current level is showing, as uniform rows */
   _rows(){
@@ -2346,8 +2387,7 @@ const cardMusic={
       ({label:t.name,meta:"",track:t}));
   },
   _item(t){
-    let base="";try{base=hostBridge.mediaBase()}catch(e){}
-    return{label:String(t.name||"track"),url:base+"?id="+t.id,
+    return{label:String(t.name||"track"),url:this._base()+"?id="+t.id,
       cors:true,region:t.dir||""};
   },
   _enter(ctx){
@@ -2422,10 +2462,12 @@ const cardMusic={
       ?{head:esc(this._artist),sub:this._albums(this._artist).length+" albums"}
       :{head:esc(this._album),sub:esc(this._artist)};
     const rows=this._rows();
+    const w=rowWindow(this,rows,this.sel);
     return "<div style='margin-bottom:12px'>"+
       "<div style='color:var(--accent);font-size:15px'>"+where.head+"</div>"+
       "<div class='lbl'>"+where.sub+"</div></div>"+
-      rows.map((r,i)=>{
+      w.items.map((r,j)=>{
+        const i=w.start+j;
         const playing=r.track&&cur&&this._item(r.track).url===cur.url;
         return "<div class='row"+(i===this.sel?" hl sel":"")+
           "' data-row='"+i+"'>"+
@@ -2467,8 +2509,7 @@ const cardMusic={
   renderCompact(ctx){
     if(!hostBridge||!hostBridge.listMedia)return face("\u2014","app only");
     const cur=ctx.audio.current(),all=this._all();
-    const mine=cur&&all.some(t=>this._item(t).url===cur.url);
-    if(mine)return face(ctx.audio.paused()?"\u2016":"\u25b6",esc(cur.label),
+    if(cur&&this._owns(ctx))return face(ctx.audio.paused()?"\u2016":"\u25b6",esc(cur.label),
       {color:ctx.audio.paused()?"":"var(--up)",sub:esc(cur.region||"")});
     const artists=this._artists();
     return face(all.length,"tracks",
@@ -2507,9 +2548,12 @@ const cardMusic={
     }
     return false;
   },
+  /* Ownership is a URL prefix test, not a search of the library. ctx is
+     optional so the repaint timer can ask without one. */
   _owns(ctx){
-    const cur=ctx.audio.current();
-    return !!(cur&&this._all().some(t=>this._item(t).url===cur.url));
+    const cur=(ctx?ctx.audio:audioBus).current();
+    const b=this._base();
+    return !!(cur&&cur.url&&b&&cur.url.indexOf(b+"?id=")===0);
   },
   /* BACK climbs the browse hierarchy before it leaves the card */
   onBack(ctx){return this._up(ctx)},
@@ -2518,7 +2562,7 @@ const cardMusic={
      without opening it, or start the highlighted track. */
   onToggle(ctx){
     const cur=ctx.audio.current();
-    if(cur&&this._all().some(t=>this._item(t).url===cur.url)){
+    if(cur&&this._owns(ctx)){
       if(ctx.audio.paused())ctx.audio.resume(); else ctx.audio.pause();
       render();return;
     }
@@ -2811,7 +2855,9 @@ const cardVideo={
          " <span class='lbl'>· "+esc(this._season)+"</span>":"")+
        "</div><div class='lbl'>"+rows.length+
        (this._level==="seasons"?" seasons":" videos")+"</div></div>";
-    return head+rows.map((r,i)=>{
+    const w=rowWindow(this,rows,this.sel);
+    return head+w.items.map((r,j)=>{
+      const i=w.start+j;
       const ext=r.video&&!this._playable(r.video);
       return "<div class='row"+(i===this.sel?" hl sel":"")+
         "' data-row='"+i+"'>"+
