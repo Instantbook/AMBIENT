@@ -262,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v68";
+const APP_VERSION="v69";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3404,7 +3404,23 @@ if("serviceWorker" in navigator){
     if(audioBus.playing()){pending=true;return} /* wait for silence */
     reloading=true;location.reload();
   };
-  on("audio",p=>{if(p.state==="stop"&&pending)apply()});
+  /* Any moment the audio is not actually playing will do. Waiting for
+     "stop" alone was a deadlock once shuffle existed: a shuffle never
+     stops, it ends one track and starts the next, so a pending update sat
+     there for as long as the music ran and the deploy simply never
+     arrived. "ended" fires in the gap, and apply() re-checks playing()
+     anyway, so a track that is followed instantly by another just defers
+     again rather than reloading mid-song. */
+  on("audio",p=>{
+    if(!pending)return;
+    if(p.state==="stop"||p.state==="pause")apply();
+    /* "ended" fires BEFORE shuffle picks the next track, so checking
+       immediately would see silence and reload out from under a shuffle
+       that is about to carry on. Give the next track a moment to start;
+       apply() re-checks, so a continuing shuffle simply defers again and
+       only a genuine end reloads. */
+    else if(p.state==="ended")setTimeout(apply,2000);
+  });
   navigator.serviceWorker.addEventListener("controllerchange",()=>{
     /* first install claims an uncontrolled page — nothing stale to fix */
     if(hadController)apply();
