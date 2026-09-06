@@ -152,7 +152,14 @@ export default {
           const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>/g) || [];
           let n = 0;
           for (const b of blocks) {
-            if (n >= 8) break;
+            /* 8 was the whole reason the card looked frozen: five feeds
+               could only ever produce forty rows between them, the client
+               then showed twelve, and the top eight of a news feed barely
+               move inside the 300s upstream cache - so a refresh returned
+               a list that was genuinely identical. 40 gives a few hundred
+               to page through; the summaries are already capped at 400
+               chars, which keeps the payload around 150KB. */
+            if (n >= 40) break;
             const title = decode(pick(b, "title"));
             if (!title) continue;
             const link = pick(b, "link") ||

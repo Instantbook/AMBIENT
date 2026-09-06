@@ -262,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v69";
+const APP_VERSION="v70";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -986,12 +986,15 @@ function pageRows(){
    ABSOLUTE index in data-row, so onPick and the position readout still line
    up with the real list. */
 function rowWindow(card,rows,sel){
-  const span=Math.max(12,pageRows()+8),pad=3;
+  const span=Math.max(12,pageRows()+8);
   const last=Math.max(0,rows.length-span);
-  let st=card._win|0;
-  if(sel<st+pad)st=sel-pad;
-  if(sel>st+span-1-pad)st=sel-span+1+pad;
-  st=Math.max(0,Math.min(last,st));
+  /* The selection rides at the TOP, so everything below the highlight is
+     what you have NOT seen yet. Holding the window until the selection
+     reached an edge did the opposite: the highlight sank to the bottom of
+     the view and the screen filled with rows already read, which is
+     backwards for a list you are working down. One row is kept above as
+     context; it sits just off the top of the scroll. */
+  const st=Math.max(0,Math.min(last,sel-1));
   card._win=st;
   card._winTotal=rows.length;
   return{start:st,items:rows.slice(st,st+span)};
@@ -1022,7 +1025,7 @@ function renderCard(card){
        the list still while the selection is already visible. */
     const cur=host.querySelector(".sel");
     if(cur&&cur.scrollIntoView){
-      try{cur.scrollIntoView({block:"nearest"})}catch(e){}
+      try{cur.scrollIntoView({block:"start"})}catch(e){}
     }
     /* Where am I in this list? With four rows visible and hundreds of
        them, a scrollbar the stage does not draw is not an answer; the
@@ -1588,10 +1591,20 @@ const cardHeadlines={
   pane:"news",size:"large",order:40,refresh:300,offline:"cached",
   sources:[{key:"news",origin:"worker",path:"/feeds"}],
   sel:0,_open:false,
-  _items(ctx,data){
+  /* How many of the batch are on screen. The Worker now sends ~180 rows
+     from eight publishers; showing them all at once is a wall, and showing
+     twelve threw away everything that had already been fetched. ► reveals
+     another page, and only forces a network refresh once you have reached
+     the end of what is already here. */
+  _PAGE:40,_shown:40,
+  _all(ctx,data){
     const d=(data&&data.news)||ctx.cachedOnly("news");
     if(!d)return null;
-    return (Array.isArray(d)?d:d.items||[]).slice(0,12);
+    return Array.isArray(d)?d:d.items||[];
+  },
+  _items(ctx,data){
+    const a=this._all(ctx,data);
+    return a?a.slice(0,this._shown):null;
   },
   render(ctx,data){
     const items=this._items(ctx,data);
@@ -1603,7 +1616,12 @@ const cardHeadlines={
       return "<div class='state'>awaiting feed relay…"+
         (data&&data["news.err"]?" ("+data["news.err"]+")":"")+"</div>";
     }
-    return items.map((it,i)=>{
+    /* Only the visible rows are built. At twelve headlines the whole list
+       was free; at a few hundred, redrawing all of them on every ▲▼ is the
+       same cost that made the music list look frozen. */
+    const w=rowWindow(this,items,this.sel);
+    return w.items.map((it,j)=>{
+      const i=w.start+j;
       const c=srcColor(it.source);
       const on=(i===this.sel);
       /* The selected story expands in place. OK used to do nothing at all,
@@ -1628,10 +1646,15 @@ const cardHeadlines={
      that is quiet from one that is broken. */
   renderFooter(ctx){
     const c=cacheGet("news");
+    const all=this._all(ctx,null);
+    const more=all?Math.max(0,all.length-this._shown):0;
     return "<div class='lbl' style='display:flex;"+
       "justify-content:space-between'><span>"+
       (this._busy?"refreshing…":c?"updated "+ago(c.t):"never updated")+
-      "</span><span>OK expands · ► refresh</span></div>";
+      (all?" · "+this._shown+" of "+all.length:"")+
+      "</span><span>OK expands · ► "+
+      (more?"show "+Math.min(more,this._PAGE)+" more":"refresh")+
+      "</span></div>";
   },
   /* A headline cannot be read in a 118px square — it just gets guillotined
      mid-word. The tile reports the HOLDING instead: how many, from how many
@@ -1651,14 +1674,32 @@ const cardHeadlines={
     /* moving the selection closes the open story - keeping it open while
        the highlight walked away read as the summary belonging to whatever
        row was now selected */
+    const all=this._all(ctx,null)||items;
     if(k==="down"&&this.sel<items.length-1){this.sel++;this._open=false;
       ctx.rerender();return true}
+    /* Scrolling must not dead-end. Reaching the bottom of the page reveals
+       the next one instead of simply refusing to move, which is what made
+       the card feel like it held twelve stories and nothing more. */
+    if(k==="down"&&this._shown<all.length){
+      this._shown=Math.min(all.length,this._shown+this._PAGE);
+      this.sel++;this._open=false;ctx.rerender();return true;
+    }
     if(k==="up"&&this.sel>0){this.sel--;this._open=false;
       ctx.rerender();return true}
     if(k==="enter"){this._open=!this._open;ctx.rerender();return true}
     /* ► forces a fetch. ◄ is left alone so it can still leave the card -
        an exit must never be the key you have to think about. */
-    if(k==="right"){this._refresh(ctx);return true}
+    /* ► pages through what is already here, and only goes to the network
+       once there is nothing left to reveal - a refresh inside the Worker's
+       300s upstream cache returns a byte-identical list, which is most of
+       why "refresh" looked like it did nothing at all. */
+    if(k==="right"){
+      if(this._shown<all.length){
+        this._shown=Math.min(all.length,this._shown+this._PAGE);
+        ctx.rerender();return true;
+      }
+      this._refresh(ctx);return true;
+    }
     return false;
   },
   _refresh(ctx){
@@ -1669,7 +1710,12 @@ const cardHeadlines={
        whether it succeeded or failed */
     Promise.resolve(refreshCard(this,true))
       .catch(()=>{})
-      .then(()=>{this._busy=false;try{ctx.rerender()}catch(e){}});
+      .then(()=>{
+        /* a new batch starts at the top and one page deep again, or you
+           are left looking at row 140 of a list that has been replaced */
+        this._busy=false;this._shown=this._PAGE;this.sel=0;this._open=false;
+        try{ctx.rerender()}catch(e){}
+      });
   },
   onToggle(ctx){this._refresh(ctx)},
   onPick(ctx,i){

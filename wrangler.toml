@@ -24,7 +24,12 @@ compatibility_date = "2026-09-01"
 #   feeds.reuters.com dead, the endpoint was retired
 #   cbc.ca            times out from here
 #   rss.dw.com        serves no pubDate, so it cannot be sorted by recency
-FEEDS = "https://www.theguardian.com/international/rss,https://feeds.bbci.co.uk/news/world/rss.xml,https://feeds.npr.org/1001/rss.xml,https://www.aljazeera.com/xml/rss/all.xml,https://www.france24.com/en/rss"
+# Verified working before being added here (200 + <item> + pubDate):
+#   globeandmail world 100   sky news world 9
+# CBC was tried again and still contributes nothing - it answers this
+# machine fine but times out from the Worker's edge, exactly as the
+# note below says. Do not add it a third time.
+FEEDS = "https://www.theguardian.com/international/rss,https://feeds.bbci.co.uk/news/world/rss.xml,https://feeds.npr.org/1001/rss.xml,https://www.aljazeera.com/xml/rss/all.xml,https://www.france24.com/en/rss,https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/world/,https://feeds.skynews.com/feeds/rss/world.xml"
 
 # SECURITY: the 5-character room code is convenience pairing, NOT
 # authentication, and this header is only honoured by browsers - curl ignores
