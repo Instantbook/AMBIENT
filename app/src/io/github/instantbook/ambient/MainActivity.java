@@ -507,6 +507,56 @@ public class MainActivity extends Activity {
         "    try{cur.click()}catch(_){}\n" +
         "    ev.preventDefault();ev.stopPropagation();}\n" +
         "},true);\n" +
+        // ---- fixed chrome sitting on top of a playing video ----
+        // A site pins its nav to the bottom of the viewport. Over a video
+        // that fills the viewport that lands straight across the picture,
+        // and on a worn display there is no "rest of the screen" to move it
+        // to. Hidden only while something is actually playing and restored
+        // the moment it pauses, so navigation is never taken away. The
+        // player's own controls are left alone - anything inside the
+        // player's container is its UI, not the site's chrome.
+        "var H='__ambhide';\n" +
+        "var s2=document.createElement('style');\n" +
+        "s2.textContent='.'+H+'{opacity:0!important;'+\n" +
+        "  'pointer-events:none!important}';\n" +
+        "document.documentElement.appendChild(s2);\n" +
+        "function vids(){return [].slice.call(\n" +
+        "  document.querySelectorAll('video'));}\n" +
+        "function live(){return vids().filter(function(v){\n" +
+        "  return !v.paused&&!v.ended;});}\n" +
+        // Fixed chrome sits near the top of the DOM, so two levels under
+        // body is far enough. Walking every node and calling
+        // getComputedStyle on each, once a second, would cost more than the
+        // problem it solves.
+        "function shallow(){var b=document.body;if(!b)return [];\n" +
+        "  var l1=[].slice.call(b.children),out=l1.slice();\n" +
+        "  l1.forEach(function(e){\n" +
+        "    out=out.concat([].slice.call(e.children));});\n" +
+        "  return out;}\n" +
+        "function owner(v){var p=v;\n" +
+        "  for(var i=0;i<4&&p&&p.parentElement;i++)p=p.parentElement;\n" +
+        "  return p;}\n" +
+        "var wasOn=null;\n" +
+        "function sweep(){\n" +
+        "  var vs=live(),on=vs.length>0;\n" +
+        "  if(!on){\n" +
+        "    if(wasOn!==false){\n" +
+        "      [].slice.call(document.querySelectorAll('.'+H))\n" +
+        "        .forEach(function(e){e.classList.remove(H);});\n" +
+        "      wasOn=false;}\n" +
+        "    return;}\n" +
+        "  var roots=vs.map(owner);\n" +
+        "  shallow().forEach(function(e){\n" +
+        "    if(e.classList.contains(H))return;\n" +
+        "    var st;try{st=getComputedStyle(e)}catch(_){return}\n" +
+        "    if(st.position!=='fixed'&&st.position!=='sticky')return;\n" +
+        "    var r=e.getBoundingClientRect();\n" +
+        "    if(r.height<10||r.width<50)return;\n" +
+        "    for(var i=0;i<roots.length;i++)\n" +
+        "      if(roots[i]&&roots[i].contains(e))return;\n" +
+        "    e.classList.add(H);});\n" +
+        "  wasOn=true;}\n" +
+        "setInterval(sweep,1000);\n" +
         // No auto-selection on load: picking a target unasked moved focus
         // on pages that were working fine.
         "})();";
