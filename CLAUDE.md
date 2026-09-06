@@ -380,7 +380,16 @@ radio stations hit. The response carries CORS headers, so **local tracks drive t
 FFT visualiser**. Range requests return a genuine 206, so seeking works.
 
 Browsing is artist → album → track; an artist with one album skips the album level in
-both directions.
+both directions. Shuffle sits as three rows at the top of the artist list (all / Greek /
+English), each showing its pool size.
+
+**Greek vs English is a folder test, and has to be.** `A:\New Audio` has one `Greek Music`
+folder holding 29 artists, with every other artist at the top level — so `RELATIVE_PATH`
+matching `/greek/i` is the rule, which is why `listMedia()` returns a `path` field. Do not
+try to detect it from the tags: the Greek titles were **romanised to Latin script** in an
+earlier pass, so they read as English to any test of the text. A Greek-script check
+survives only as a fallback for anything filed outside that folder, and the card shows
+"app update needed" when `path` is absent rather than under-counting silently.
 
 ## Where things stand
 
