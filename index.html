@@ -262,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v67";
+const APP_VERSION="v68";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -730,6 +730,7 @@ function setDim(v,quiet){
   persist();
 }
 let ovSel=0;                /* overview selection */
+let lastRight=0;            /* timestamp of the last ►, for double-press skip */
 let dblTimer=null,dblId=null;  /* pending single-press, awaiting a double */
 let online=navigator.onLine;
 const bus={};
@@ -1196,6 +1197,27 @@ function route(k,held){
      whatever that key normally means - reaching for the remote in the dark
      should not skip a track or leave the card you were on. */
   if(screenState.off){screenWake();return}
+  /* Double-► is "next track", and it works from ANYWHERE - the bezel
+     included - because skipping is something you do without wanting to
+     open a card and walk a list to a button.
+
+     Deliberately NOT disambiguated with a timer. Waiting 260ms to find out
+     whether a second press is coming would put that lag on every ◄►
+     press while music plays, which is most of the time, and sluggish tile
+     navigation is a worse trade than the one stray move you get here: the
+     first press does its ordinary job, the second skips instead of doing
+     its own. Only ► is taken, so ◄ keeps every meaning it had and the way
+     out of a card is untouched.
+
+     Pausing is not here: that is the centre button, single to play and
+     double to pause, on the row or the tile. */
+  if(k==="right"&&!held&&mode!=="overview"&&cardMusic._owns()){
+    const t=Date.now();
+    if(t-lastRight<340){
+      lastRight=0;
+      if(cardMusic._next(ctxFor(cardMusic)))return;
+    }else lastRight=t;
+  }
   if(mode==="overview"){
     /* columns must match what the grid actually rendered (auto-fill at
        150px + gap), or ▲▼ jump by the wrong stride */
@@ -2471,6 +2493,30 @@ const cardMusic={
     ctx.audio.play(this._item(pick));
     try{ctx.rerender()}catch(e){}
   },
+  /* Which library row is the bus actually playing? The URL carries the
+     MediaStore id, so it maps straight back without a search of anything. */
+  _currentTrack(){
+    const cur=audioBus.current();
+    if(!cur||!cur.url)return null;
+    const m=/[?&]id=(\d+)/.exec(cur.url);
+    if(!m)return null;
+    const id=Number(m[1]);
+    return this._all().find(t=>t.id===id)||null;
+  },
+  /* "Next" means the next thing this card would have played anyway: another
+     draw when a shuffle is running, otherwise the next track of the album
+     you are in, wrapping at the end rather than falling silent. */
+  _next(ctx){
+    if(this._shuf){this._shufNext(ctx);return true}
+    const t=this._currentTrack();
+    if(!t)return false;
+    const list=this._tracksIn(t.dir||"Unknown",t.album||"Unknown");
+    const i=list.findIndex(x=>x.id===t.id);
+    if(i<0||list.length<2)return false;
+    ctx.audio.play(this._item(list[(i+1)%list.length]));
+    try{ctx.rerender()}catch(e){}
+    return true;
+  },
   _artists(){return this._index().artists},
   _albums(artist){return this._index().albums.get(artist)||[]},
   _tracksIn(artist,album){
@@ -2640,9 +2686,10 @@ const cardMusic={
       " \u00b7 \u25c4\u25ba back to tiles \u00b7 BACK "+
       (this._canClimb()?"up a level":"to tiles")+
       (this._owns(ctx)?" \u00b7 fullscreen: \u25c4\u25ba seek":"")+
+      (this._owns(ctx)?"<br>\u25ba\u25ba (double) skips to the next track, from "+
+        "anywhere \u00b7 OK once plays, twice pauses":"")+
       (this._level==="artists"
-        ?"<br>shuffle is the top rows \u00b7 OK on the one playing skips to "+
-         "the next track \u00b7 STOP SHUFFLE ends it"
+        ?"<br>shuffle is the top rows \u00b7 STOP SHUFFLE ends it"
         :"")+"</div>";
   },
   /* Elapsed / remaining with a scrub bar, pinned under the scrolling list
