@@ -286,6 +286,7 @@ The scheme, and the reasoning, since it went through several wrong versions:
 | **Bezel** | move between tiles (spatial) | move between tiles | open card · again = fullscreen | overview |
 | **A card** | choose a row | **back to the tiles** | act on the row | **up one level** |
 | **RADIO** | choose | ► stars (card consumes it) | play/stop | back to tiles |
+| **LAUNCH** | choose | ► arms "remove?" (card consumes it) · ◄ leaves, or cancels if armed | open · **removes when armed** | cancels if armed, else leaves |
 | **MUSIC** | choose | back to tiles | play/resume · **twice = pause** | track → album → tiles |
 | **Fullscreen** | as the card | **seek ∓10s, ∓3s per repeat held** | card action | leave fullscreen |
 | **Overview** | move | move | open | bezel |
