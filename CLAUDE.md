@@ -50,7 +50,7 @@ has nothing reusable for AMBIENT).
 
 | Endpoint | State | Needs |
 |---|---|---|
-| `/feeds` | ✅ 12 headlines, BBC + ΤΟ ΒΗΜΑ | `FEEDS` var |
+| `/feeds` | ✅ ~177 headlines, 7 publishers (40/feed) | `FEEDS` var |
 | `/radio` | ✅ scrapes greek-radio.gr for stream URLs | — |
 | `/ws` | ✅ Durable Objects available on this plan | `ROOMS` binding |
 
