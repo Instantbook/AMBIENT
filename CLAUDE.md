@@ -288,6 +288,7 @@ The scheme, and the reasoning, since it went through several wrong versions:
 | **RADIO** | choose | ► stars (card consumes it) | play/stop | back to tiles |
 | **LAUNCH** | choose | ► arms "remove?" (card consumes it) · ◄ leaves, or cancels if armed | open · **removes when armed** | cancels if armed, else leaves |
 | **MUSIC** | choose | back to tiles | play/resume · **twice = pause** | track → album → tiles |
+| **anywhere, music playing** | — | **►► (double) = next track** | — | — |
 | **Fullscreen** | as the card | **seek ∓10s, ∓3s per repeat held** | card action | leave fullscreen |
 | **Overview** | move | move | open | bezel |
 
@@ -310,6 +311,12 @@ Principles worth keeping:
   gets no timeline; inventing one would be a lie.
 - **Fullscreen does not cycle cards with ◄►.** Nobody flips between fullscreen weather
   and fullscreen markets.
+- **Skip is a DOUBLE ►, and is not disambiguated by a timer.** Waiting ~260ms to learn
+  whether a second press is coming would put that lag on every ◄► press while music plays,
+  which is most of the time; sluggish tile navigation is the worse trade. The first press
+  does its ordinary job and the second skips instead of doing its own - one stray tile move,
+  no latency anywhere. Only ► is taken, so ◄ keeps every meaning and the guaranteed way out
+  of a card is untouched.
 - **Hold = `e.repeat`.** Android sends auto-repeat keydowns, so press-and-hold needs
   no timers and stops the instant the key is released.
 - **The staged card gets first refusal on every key except BACK.** Handling ◄► in the
