@@ -447,20 +447,35 @@ public class MainActivity extends Activity {
         "  'outline-offset:2px!important;scroll-margin:120px!important}';\n" +
         "document.documentElement.appendChild(st);\n" +
         "var cur=null;\n" +
+        // Typing must never be hijacked. A login field is the one place a
+        // wrong guess is unrecoverable: OK has to submit the form, not
+        // click whatever the highlight happened to be resting on.
+        "function edit(e){if(!e)return false;\n" +
+        "  if(e.isContentEditable)return true;\n" +
+        "  var t=(e.tagName||'').toUpperCase();\n" +
+        "  if(t==='TEXTAREA'||t==='SELECT')return true;\n" +
+        "  if(t!=='INPUT')return false;\n" +
+        "  return !/^(button|submit|reset|checkbox|radio|image|file)$/i\n" +
+        "    .test(e.type||'text');}\n" +
+        "function typing(){return edit(document.activeElement);}\n" +
         "function vis(e){var r=e.getBoundingClientRect();\n" +
         "  if(r.width<8||r.height<8)return false;\n" +
+        "  if(r.bottom<0||r.top>innerHeight*3)return false;\n" +
         "  var s=getComputedStyle(e);\n" +
         "  return s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0';}\n" +
         "function all(){return [].slice.call(document.querySelectorAll(S))\n" +
         "  .filter(vis);}\n" +
         "function box(e){var r=e.getBoundingClientRect();\n" +
-        "  return{x:r.left+r.width/2,y:r.top+r.height/2,r:r};}\n" +
+        "  return{x:r.left+r.width/2,y:r.top+r.height/2};}\n" +
+        // mark() must NOT focus. Focusing an input on Android pops the
+        // on-screen keyboard, so merely passing the highlight over a login
+        // box would throw the IME up uninvited. The outline is the
+        // selection; focus happens only when OK actually chooses it.
         "function mark(e){if(cur)cur.classList.remove('__ambsel');\n" +
         "  cur=e;if(!e)return;e.classList.add('__ambsel');\n" +
-        "  try{e.focus({preventScroll:true})}catch(_){}\n" +
         "  try{e.scrollIntoView({block:'center',inline:'nearest'})}catch(_){}}\n" +
         "function move(dir){var els=all();if(!els.length)return false;\n" +
-        "  if(!cur||els.indexOf(cur)<0){mark(els[0]);return true;}\n" +
+        "  if(!cur||els.indexOf(cur)<0||!vis(cur)){mark(els[0]);return true;}\n" +
         "  var c=box(cur),best=null,bd=1e9;\n" +
         "  for(var i=0;i<els.length;i++){var e=els[i];if(e===cur)continue;\n" +
         "    var b=box(e),dx=b.x-c.x,dy=b.y-c.y;\n" +
@@ -470,22 +485,30 @@ public class MainActivity extends Activity {
         "    var d=fwd+off*2;\n" +      // straight ahead beats diagonal
         "    if(d<bd){bd=d;best=e;}}\n" +
         "  if(best){mark(best);return true;}return false;}\n" +
-        "function activate(){if(!cur)return false;\n" +
-        "  try{cur.click()}catch(_){}\n" +
-        "  return true;}\n" +
         "document.addEventListener('keydown',function(ev){\n" +
         "  var k=ev.key,d=null;\n" +
         "  if(k==='ArrowRight')d='right';else if(k==='ArrowLeft')d='left';\n" +
         "  else if(k==='ArrowDown')d='down';else if(k==='ArrowUp')d='up';\n" +
-        "  if(d){\n" +
-        "    var t=ev.target;\n" +
-        "    if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))return;\n" +
-        "    if(move(d)){ev.preventDefault();ev.stopPropagation();}\n" +
-        // nothing further that way: let the page scroll as before
+        "  if(!d&&k!=='Enter')return;\n" +
+        "  if(typing()){\n" +
+        // In a text field the keys belong to the field: ◄► are the text
+        // cursor and Enter submits. ▲▼ are the way OUT - without them a
+        // field you have finished with is a trap, since the page keeps
+        // focus after the keyboard closes.
+        "    if(d==='up'||d==='down'){\n" +
+        "      try{document.activeElement.blur()}catch(_){}\n" +
+        "      if(move(d)){ev.preventDefault();ev.stopPropagation();}\n" +
+        "    }\n" +
         "    return;}\n" +
-        "  if(k==='Enter'){if(activate()){ev.preventDefault();}}\n" +
+        "  if(d){if(move(d)){ev.preventDefault();ev.stopPropagation();}return;}\n" +
+        // Enter with nothing chosen must fall through to the page, or a
+        // site's own key handling stops working for no visible reason.
+        "  if(cur){try{cur.focus({preventScroll:true})}catch(_){}\n" +
+        "    try{cur.click()}catch(_){}\n" +
+        "    ev.preventDefault();ev.stopPropagation();}\n" +
         "},true);\n" +
-        "setTimeout(function(){if(!cur)move('down')},400);\n" +
+        // No auto-selection on load: picking a target unasked moved focus
+        // on pages that were working fine.
         "})();";
 
 
@@ -748,6 +771,13 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView v, String url) {
                 super.onPageFinished(v, url);
+                // Write cookies to disk NOW, not at onPause. A TV app is
+                // killed rather than closed - a sideloaded reinstall
+                // SIGKILLs it outright - and onPause does not run on a
+                // kill, so anything since the last flush is lost. That is
+                // exactly a login: signed in, killed, signed out again.
+                try { CookieManager.getInstance().flush(); }
+                catch (Throwable ignored) {}
                 // A launched site gets arrow keys as SCROLLING and nothing
                 // else: the WebView has no spatial navigation, so links can
                 // be scrolled past but never chosen. This injects the

@@ -339,6 +339,33 @@ durable copy — it survives `pm clear` and uninstall, which localStorage does n
 
 ## Local media
 
+### Lists must assume thousands of rows
+
+MediaStore on this device returns **8,529 audio tracks / 961 artists**. Both bridge listers once stopped
+at a hardcoded 500, which was invisible: no error, no marker, just a library that looked small. Raised to
+20,000 in v63 — but uncapping it immediately exposed three things that were free at 500 rows and fatal at
+8,000, all of them running on *every keypress*, because a card redraws its whole list on each one:
+
+- **A scan per row.** `_rows()` called `_albums(artist)` for each of 961 artists, and each scanned the
+  whole library — ~8M operations, 1,511 ms for one `_rows()` call. Cards must build an **index once**
+  (`cardMusic._index()`, keyed on the track array's identity so a rescan invalidates it), never scan
+  per row. Watch for `seen.indexOf(x)` inside a `forEach` — that is the same O(n²) in miniature.
+- **A JS-bridge call per item.** `_item()` called `hostBridge.mediaBase()` per track, so one `_owns()`
+  check made 8,347 synchronous JNI calls. Bridge values that cannot change while the app runs are read
+  **once**; ownership is a URL prefix test, not a search.
+- **Rendering the whole list.** Use `rowWindow(card, rows, sel)` — it returns only the rows that fit plus
+  a margin, holding its start until the selection nears an edge so the list scrolls instead of jumping.
+  Rendered rows keep their **absolute** index in `data-row`, which is what `onPick` and the `#st-pos`
+  readout address; the readout reads `card._winTotal`, not the rendered count.
+
+Measured on hardware, v63 → v64: **3,722 ms → 19.5 ms per keypress.** The symptom of getting this wrong
+is not slowness, it is a list that appears completely frozen.
+
+Two related layout facts: the windowed stage body is **187px — four rows** on this device, which is why
+`prefersFull` sends RADIO/MUSIC/VIDEO straight to fullscreen (~16 rows); and ◄► page-jump by a measured
+`pageRows()` in browse levels, staying transport only at the level that owns a timeline.
+
+
 **An ordinary app cannot read a removable volume at all** — not even with All-files
 access granted. Direct filesystem scanning found a card full of music completely empty
 while a track copied to internal storage appeared instantly. Do not retry that approach.
