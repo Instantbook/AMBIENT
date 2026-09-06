@@ -262,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v65";
+const APP_VERSION="v66";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -366,6 +366,12 @@ const audioBus=(()=>{
     emit("audio",{state:"error",item});
   }
   if(el)el.addEventListener("error",()=>fail(current));
+  /* "this track finished on its own" is a different thing from stop(), and
+     nothing could hear it before: shuffle needs to know when to advance,
+     and a natural end is the only signal that separates it from a user
+     pressing stop. */
+  if(el)el.addEventListener("ended",()=>emit("audio",
+    {state:"ended",item:current}));
   function wire(){ /* once, only for cors-clean sources */
     if(wired||!el)return;
     try{
@@ -2340,8 +2346,19 @@ const cardMusic={
      ◄ climbs back up, and only at the top does ◄ fall through to the shell
      and leave the card. */
   _level:"artists",_artist:null,_album:null,
+  /* null, or {kind:"all"|"greek"|"english", recent:[ids]} */
+  _shuf:null,_note:"",
   init(ctx){
     this._scan(ctx);
+    /* Advance the shuffle when a track runs out. Only a natural end counts:
+       stop() and pause() do not fire this, so pressing stop stays stopped
+       instead of pulling the next song out of the shuffle. Guarded on
+       ownership because RADIO shares the same bus. */
+    on("audio",e=>{
+      if(!e||e.state!=="ended"||!this._shuf)return;
+      if(!this._owns())return;
+      this._shufNext(ctx);
+    });
     /* one repaint a second, and only while this card is both on stage and
        the thing actually playing - otherwise it costs nothing */
     setInterval(()=>{
@@ -2388,7 +2405,7 @@ const cardMusic={
   _index(){
     const all=this._all();
     if(this._idx&&this._idx.src===all)return this._idx;
-    const byArtist=new Map();
+    const byArtist=new Map(),greek=[],other=[];
     all.forEach(t=>{
       const a=t.dir||"Unknown",al=t.album||"Unknown";
       let m=byArtist.get(a);
@@ -2396,13 +2413,63 @@ const cardMusic={
       let ts=m.get(al);
       if(!ts){ts=[];m.set(al,ts)}
       ts.push(t);
+      (this._isGreek(t)?greek:other).push(t);
     });
     const cmp=(x,y)=>x.localeCompare(y);
     const artists=Array.from(byArtist.keys()).sort(cmp);
     const albums=new Map();
     byArtist.forEach((m,a)=>albums.set(a,Array.from(m.keys()).sort(cmp)));
-    this._idx={src:all,byArtist,artists,albums};
+    /* Whether the bridge gave us folders at all. An older APK has no path
+       field, and then "Greek" falls back to the script test - which the
+       romanising made unreliable, so the count would be quietly wrong
+       rather than visibly missing. Say which it is. */
+    const hasPath=all.some(t=>t.path);
+    this._idx={src:all,byArtist,artists,albums,greek,other,hasPath};
     return this._idx;
+  },
+  /* Which half of the collection is this?
+     The library has ONE "Greek Music" folder holding 29 artists, and every
+     other artist sits at the top level, so the folder is the answer - and
+     it is the only one left, because the tags were romanised: the Greek
+     titles are in Latin script now and read as English to any test of the
+     text. The script check is a fallback for anything filed outside that
+     folder, and for a build of the app whose bridge predates the path
+     field, where every path is empty. */
+  _isGreek(t){
+    if(/greek/i.test(t.path||""))return true;
+    return /[Ͱ-Ͽἀ-῿]/
+      .test((t.dir||"")+(t.album||"")+(t.name||""));
+  },
+  _pool(kind){
+    const ix=this._index();
+    return kind==="greek"?ix.greek:kind==="english"?ix.other:this._all();
+  },
+  /* Shuffle. Keeps a short memory of what it just played so a small pool
+     does not repeat itself immediately - with no memory a 30-track pool
+     replays a song every few minutes and reads as a fault. */
+  _shufStart(ctx,kind){
+    const pool=this._pool(kind);
+    if(!pool.length){this._note="nothing in that group";ctx.rerender();return}
+    this._shuf={kind,recent:[]};
+    this._note="";
+    this._shufNext(ctx);
+  },
+  _shufNext(ctx){
+    if(!this._shuf)return;
+    const pool=this._pool(this._shuf.kind);
+    if(!pool.length){this._shuf=null;return}
+    const memory=Math.max(1,Math.min(50,Math.floor(pool.length/4)));
+    const recent=this._shuf.recent;
+    let pick=null;
+    for(let tries=0;tries<24&&!pick;tries++){
+      const c=pool[Math.floor(Math.random()*pool.length)];
+      if(recent.indexOf(c.id)<0)pick=c;
+    }
+    if(!pick)pick=pool[Math.floor(Math.random()*pool.length)];
+    recent.push(pick.id);
+    while(recent.length>memory)recent.shift();
+    ctx.audio.play(this._item(pick));
+    try{ctx.rerender()}catch(e){}
   },
   _artists(){return this._index().artists},
   _albums(artist){return this._index().albums.get(artist)||[]},
@@ -2421,9 +2488,25 @@ const cardMusic={
   },
   /* what the current level is showing, as uniform rows */
   _rows(){
-    if(this._level==="artists")
-      return this._artists().map(a=>({label:a,meta:
-        this._albums(a).length+" album"+(this._albums(a).length===1?"":"s")}));
+    if(this._level==="artists"){
+      /* Shuffle lives at the top of the artist list rather than behind a
+         key: with 961 artists the top of the list is the one place you are
+         guaranteed to pass through, and a hidden key on a device with five
+         buttons is a feature nobody finds. The counts are the whole
+         explanation of what each one will play. */
+      const ix=this._index();
+      const on=this._shuf&&this._shuf.kind;
+      const shuf=[
+        {shuf:"all",label:(on==="all"?"▶ ":"")+"SHUFFLE ALL",
+         meta:this._all().length+" tracks"},
+        {shuf:"greek",label:(on==="greek"?"▶ ":"")+"SHUFFLE GREEK",
+         meta:ix.greek.length+" tracks"+(ix.hasPath?"":" · app update needed")},
+        {shuf:"english",label:(on==="english"?"▶ ":"")+"SHUFFLE ENGLISH",
+         meta:ix.other.length+" tracks"+(ix.hasPath?"":" · approximate")}
+      ];
+      return shuf.concat(this._artists().map(a=>({label:a,meta:
+        this._albums(a).length+" album"+(this._albums(a).length===1?"":"s")})));
+    }
     if(this._level==="albums")
       return this._albums(this._artist).map(al=>({label:al,meta:
         this._tracksIn(this._artist,al).length+" tracks"}));
@@ -2437,6 +2520,15 @@ const cardMusic={
   _enter(ctx){
     const rows=this._rows(),r=rows[this.sel];
     if(!r)return;
+    /* OK on the row that is already shuffling turns it off, so the same
+       row is both the switch and the state - there is nowhere else on a
+       five-button remote to put an "off". */
+    if(r.shuf){
+      if(this._shuf&&this._shuf.kind===r.shuf){
+        this._shuf=null;ctx.audio.pause();ctx.rerender();return;
+      }
+      this._shufStart(ctx,r.shuf);return;
+    }
     if(this._level==="artists"){
       this._artist=r.label;this._level="albums";this.sel=0;
       /* one album is not a menu - skip straight to its tracks */
@@ -2460,6 +2552,11 @@ const cardMusic={
       else if(ctx.audio.paused())ctx.audio.resume();
       render();return;
     }
+    /* Choosing a particular track is a deliberate act, so it ends shuffle
+       - otherwise the next track would jump somewhere else entirely and
+       look like the choice had been ignored. Resuming the track shuffle is
+       already on (the branch above) leaves it running. */
+    this._shuf=null;
     ctx.audio.play(it);render();
   },
   /* Whether BACK will climb or leave - the hint has to say which, and
@@ -2501,7 +2598,9 @@ const cardMusic={
        at a glance the album list read as an undifferentiated track list. */
     const where=this._level==="artists"
       ?{head:String(this._all().length)+" tracks",
-        sub:this._artists().length+" artists"}
+        sub:this._artists().length+" artists"+
+          (this._shuf?" · shuffling "+this._shuf.kind:"")+
+          (this._note?" · "+esc(this._note):"")}
       :this._level==="albums"
       ?{head:esc(this._artist),sub:this._albums(this._artist).length+" albums"}
       :{head:esc(this._album),sub:esc(this._artist)};
@@ -2525,7 +2624,11 @@ const cardMusic={
       (this._level==="tracks"?"play \u00b7 OK twice pauses":"open")+
       " \u00b7 \u25c4\u25ba back to tiles \u00b7 BACK "+
       (this._canClimb()?"up a level":"to tiles")+
-      (this._owns(ctx)?" \u00b7 fullscreen: \u25c4\u25ba seek":"")+"</div>";
+      (this._owns(ctx)?" \u00b7 fullscreen: \u25c4\u25ba seek":"")+
+      (this._level==="artists"
+        ?"<br>shuffle is the top three rows \u00b7 OK on the one that is "+
+         "running stops it"
+        :"")+"</div>";
   },
   /* Elapsed / remaining with a scrub bar, pinned under the scrolling list
      rather than appended to it - thirteen track rows put it off screen,
@@ -2554,10 +2657,14 @@ const cardMusic={
     if(!hostBridge||!hostBridge.listMedia)return face("\u2014","app only");
     const cur=ctx.audio.current(),all=this._all();
     if(cur&&this._owns(ctx))return face(ctx.audio.paused()?"\u2016":"\u25b6",esc(cur.label),
-      {color:ctx.audio.paused()?"":"var(--up)",sub:esc(cur.region||"")});
+      {color:ctx.audio.paused()?"":"var(--up)",
+       sub:this._shuf?"shuffle "+this._shuf.kind:esc(cur.region||"")});
     const artists=this._artists();
+    /* face() shows at most eight dots, so colour eight - this runs on every
+       tile refresh and hashing 961 artist names to throw 953 away is the
+       same per-row waste that froze the list. */
     return face(all.length,"tracks",
-      {dots:artists.map(srcColor),
+      {dots:artists.slice(0,8).map(srcColor),
        sub:artists.length+" artist"+(artists.length===1?"":"s")});
   },
   onKey(ctx,k,held){

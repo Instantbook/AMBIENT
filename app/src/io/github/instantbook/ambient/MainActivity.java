@@ -142,7 +142,12 @@ public class MainActivity extends Activity {
                         MediaStore.Audio.Media._ID,
                         MediaStore.Audio.Media.TITLE,
                         MediaStore.Audio.Media.ARTIST,
-                        MediaStore.Audio.Media.ALBUM},
+                        MediaStore.Audio.Media.ALBUM,
+                        // Where the file lives is the only durable way to
+                        // tell one part of the collection from another:
+                        // the tags were romanised, so the Greek titles are
+                        // in Latin script now and read as English.
+                        MediaStore.Audio.Media.RELATIVE_PATH},
                         MediaStore.Audio.Media.IS_MUSIC + "!=0", null,
                         MediaStore.Audio.Media.ARTIST + "," +
                         MediaStore.Audio.Media.ALBUM + "," +
@@ -164,6 +169,8 @@ public class MainActivity extends Activity {
                      .append(",\"name\":\"").append(jesc(String.valueOf(c.getString(1))))
                      .append("\",\"dir\":\"").append(jesc(artist == null ? "" : artist))
                      .append("\",\"album\":\"").append(jesc(album == null ? "" : album))
+                     .append("\",\"path\":\"").append(jesc(
+                        c.getString(4) == null ? "" : c.getString(4)))
                      .append("\"}");
                 }
             } catch (Throwable t) {
