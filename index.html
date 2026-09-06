@@ -262,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v66";
+const APP_VERSION="v67";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2496,14 +2496,23 @@ const cardMusic={
          explanation of what each one will play. */
       const ix=this._index();
       const on=this._shuf&&this._shuf.kind;
+      /* OK on the row that is already running SKIPS to the next track -
+         that is the thing you want repeatedly, and on a five-button remote
+         it has to be reachable without leaving the row you are on. Stopping
+         gets its own row, which only exists while something is running:
+         hanging two different actions off one key would mean neither is
+         predictable. */
+      const mk=(kind,label,extra)=>({shuf:kind,
+        label:(on===kind?"▶ ":"")+label,
+        meta:on===kind?"OK skips · playing":extra});
       const shuf=[
-        {shuf:"all",label:(on==="all"?"▶ ":"")+"SHUFFLE ALL",
-         meta:this._all().length+" tracks"},
-        {shuf:"greek",label:(on==="greek"?"▶ ":"")+"SHUFFLE GREEK",
-         meta:ix.greek.length+" tracks"+(ix.hasPath?"":" · app update needed")},
-        {shuf:"english",label:(on==="english"?"▶ ":"")+"SHUFFLE ENGLISH",
-         meta:ix.other.length+" tracks"+(ix.hasPath?"":" · approximate")}
+        mk("all","SHUFFLE ALL",this._all().length+" tracks"),
+        mk("greek","SHUFFLE GREEK",
+           ix.greek.length+" tracks"+(ix.hasPath?"":" · app update needed")),
+        mk("english","SHUFFLE ENGLISH",
+           ix.other.length+" tracks"+(ix.hasPath?"":" · approximate"))
       ];
+      if(on)shuf.push({shuf:"off",label:"STOP SHUFFLE",meta:""});
       return shuf.concat(this._artists().map(a=>({label:a,meta:
         this._albums(a).length+" album"+(this._albums(a).length===1?"":"s")})));
     }
@@ -2524,9 +2533,15 @@ const cardMusic={
        row is both the switch and the state - there is nowhere else on a
        five-button remote to put an "off". */
     if(r.shuf){
-      if(this._shuf&&this._shuf.kind===r.shuf){
-        this._shuf=null;ctx.audio.pause();ctx.rerender();return;
+      if(r.shuf==="off"){
+        this._shuf=null;ctx.audio.pause();this._note="";
+        /* the STOP row disappears with the shuffle that owned it, so hold
+           the highlight in the shuffle block instead of letting it land on
+           whichever artist happens to have moved up into that slot */
+        this.sel=Math.min(this.sel,2);
+        ctx.rerender();return;
       }
+      if(this._shuf&&this._shuf.kind===r.shuf){this._shufNext(ctx);return}
       this._shufStart(ctx,r.shuf);return;
     }
     if(this._level==="artists"){
@@ -2626,8 +2641,8 @@ const cardMusic={
       (this._canClimb()?"up a level":"to tiles")+
       (this._owns(ctx)?" \u00b7 fullscreen: \u25c4\u25ba seek":"")+
       (this._level==="artists"
-        ?"<br>shuffle is the top three rows \u00b7 OK on the one that is "+
-         "running stops it"
+        ?"<br>shuffle is the top rows \u00b7 OK on the one playing skips to "+
+         "the next track \u00b7 STOP SHUFFLE ends it"
         :"")+"</div>";
   },
   /* Elapsed / remaining with a scrub bar, pinned under the scrolling list
