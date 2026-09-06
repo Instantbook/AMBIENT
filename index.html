@@ -262,7 +262,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v64";
+const APP_VERSION="v65";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2211,7 +2211,7 @@ const cardVis={
 const cardLaunch={
   id:"launch",title:"LAUNCH",icon:"globe",
   pane:"web",size:"large",order:60,refresh:null,offline:"live-only",
-  accepts:["url"],sel:0,
+  accepts:["url"],sel:0,_del:-1,
   _links(ctx){return ctx.storage.get("links",[
     {label:"YOUTUBE",url:"https://www.youtube.com"},
     {label:"WIKIPEDIA",url:"https://www.wikipedia.org"}
@@ -2225,8 +2225,25 @@ const cardLaunch={
     try{label=label||new URL(url).hostname.replace(/^www\./,"")
       .toUpperCase()}catch(e){return}
     const links=this._links(ctx);
+    /* The cap used to be push-then-slice(0,12), which silently threw away
+       the entry just added once the list was full - the add appeared to do
+       nothing at all. Say so instead, now that a link can be removed. */
+    if(links.length>=12){
+      this._note="list full (12) - remove one first";ctx.rerender();return;
+    }
     links.push({label:label.toUpperCase().slice(0,24),url});
-    ctx.storage.set("links",links.slice(0,12));
+    this._note="";
+    ctx.storage.set("links",links);
+    ctx.rerender();
+  },
+  _remove(ctx,i){
+    const links=this._links(ctx);
+    if(!links[i])return;
+    this._note="removed "+links[i].label;
+    links.splice(i,1);
+    ctx.storage.set("links",links);
+    this._del=-1;
+    if(this.sel>=links.length)this.sel=Math.max(0,links.length-1);
     ctx.rerender();
   },
   onInject(ctx,item){if(item.kind==="url")this._add(ctx,item.v)},
@@ -2237,14 +2254,23 @@ const cardLaunch={
       return "<div class='row"+(i===this.sel?" hl sel":"")+
         "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+esc(l.label)+
-        "</span><span style='color:"+srcColor(host)+
-        ";font-size:12px'>"+esc(host)+"</span></div>";
+        "</span><span style='color:"+
+        (i===this._del?"var(--down)":srcColor(host))+
+        ";font-size:12px'>"+
+        (i===this._del?"remove?":esc(host))+"</span></div>";
     }).join("")+
     "<input type='text' id='launch-in' placeholder='add: url  or  label|url'"+
     " style='margin-top:10px'>"+
-    "<div class='state' style='margin-top:6px'>▲▼ choose · OK open "+
-    "full-screen · BACK in the browser returns here · paste a link from "+
-    "the phone to add it</div>";
+    (this._note?"<div class='state' style='margin-top:6px;color:var(--accent)'>"+
+      esc(this._note)+"</div>":"")+
+    "<div class='state' style='margin-top:6px'>"+
+    (this._del>=0
+      /* Armed: say exactly what OK will do now, because OK normally opens
+         the site and a key that quietly changed meaning is a trap. */
+      ?"OK removes it · BACK or ◄ keeps it"
+      :"▲▼ choose · OK open full-screen · ► remove · BACK in the browser "+
+       "returns here · paste a link from the phone to add it")+
+    "</div>";
   },
   renderCompact(ctx){
     const links=this._links(ctx);
@@ -2256,13 +2282,31 @@ const cardLaunch={
   },
   onKey(ctx,k){
     const links=this._links(ctx);
-    if(k==="down"&&this.sel<links.length-1){this.sel++;ctx.rerender();
-      return true}
-    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    /* Moving the highlight disarms: an armed row you have walked away from
+       must not still be waiting to be deleted by the next OK. */
+    if(k==="down"&&this.sel<links.length-1){this.sel++;this._del=-1;
+      this._note="";ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._del=-1;this._note="";
+      ctx.rerender();return true}
+    /* Removal is deliberately two presses. A single key that deletes a row
+       is one mis-aimed thumb away from losing a bookmark, and there is no
+       undo. ► arms, OK confirms - and ◄ is left alone so the guaranteed
+       way out of the card never becomes a destructive key. */
+    if(k==="right"&&links[this.sel]){
+      this._del=this._del===this.sel?-1:this.sel;
+      this._note="";ctx.rerender();return true;
+    }
+    if(k==="left"&&this._del>=0){this._del=-1;ctx.rerender();return true}
     if(k==="enter"&&links[this.sel]){
+      if(this._del===this.sel){this._remove(ctx,this.sel);return true}
       try{location.assign(links[this.sel].url)}catch(e){}
       return true;
     }
+    return false;
+  },
+  /* BACK cancels an armed removal before it leaves the card */
+  onBack(ctx){
+    if(this._del>=0){this._del=-1;ctx.rerender();return true}
     return false;
   },
   onPick(ctx,i){
