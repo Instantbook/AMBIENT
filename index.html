@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v77";
+const APP_VERSION="v78";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2964,13 +2964,24 @@ const cardVideo={
     const ctx=this._ctx;
     if(!ctx)return [];
     let ids=ctx.storage.get("recent",[]);
-    if(!Array.isArray(ids)||!ids.length)return [];
+    if(!Array.isArray(ids))ids=[];
     const pos=this._positions(ctx),byId={};
+    /* Nothing recorded yet does NOT mean nothing was watched: positions
+       predate this list, so seed from them rather than showing an empty
+       shelf on the one device that already has a history. Insertion order
+       is the best guess at recency available from a plain map. */
+    if(!ids.length)ids=Object.keys(pos).reverse();
+    if(!ids.length)return [];
     this._all().forEach(v=>{byId[v.id]=v});
-    const out=[];
+    const out=[],seen={};
     ids.forEach(id=>{
       if(out.length>=3)return;
-      const v=byId[id],at=pos[id];
+      /* ids arrive as numbers from _touch and as strings from the seed
+         above, so the same film could otherwise appear twice */
+      const k=String(id);
+      if(seen[k])return;
+      seen[k]=1;
+      const v=byId[k],at=pos[k];
       /* the file may have been deleted, or watched to the end since */
       if(!v||!at)return;
       out.push({label:v.name||v.file||"video",video:v,resume:true,
@@ -2982,7 +2993,9 @@ const cardVideo={
     if(!ctx||!id)return;
     let ids=ctx.storage.get("recent",[]);
     if(!Array.isArray(ids))ids=[];
-    ids=[id].concat(ids.filter(x=>x!==id)).slice(0,8);
+    /* compared as strings: the seeded ids come from object keys and these
+       come from MediaStore as numbers, and "42" !== 42 would keep both */
+    ids=[id].concat(ids.filter(x=>String(x)!==String(id))).slice(0,8);
     ctx.storage.set("recent",ids);
   },
   _rows(){
