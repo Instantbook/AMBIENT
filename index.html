@@ -133,6 +133,16 @@ html,body{height:100%;background:var(--bg);color:var(--ink);
 .dots{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;max-height:14px;
   overflow:hidden}
 .dots i{width:6px;height:6px;border-radius:50%;display:block;flex:none}
+/* A battery, drawn rather than spelled out: the cell plus the little nub on
+   the positive end, so it reads as a battery at 118px without a label. The
+   outline stays monotone frame furniture; only the fill carries meaning. */
+.batt{position:relative;height:11px;width:46px;margin:6px auto 0;
+  border:1px solid var(--dim);border-radius:2px;padding:1px;
+  box-sizing:border-box}
+.batt::after{content:"";position:absolute;right:-4px;top:2px;width:3px;
+  height:5px;background:var(--dim);border-radius:0 1px 1px 0}
+.batt i{display:block;height:100%;border-radius:1px;transition:width .5s}
+.batt.wide{width:100%;height:13px;margin:6px 0 0}
 /* sel = where the highlight is right now; staged = what the main window
    is showing. They are different states and must read differently. */
 .tile.sel,.tile:focus{border-color:var(--accent);
@@ -262,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v70";
+const APP_VERSION="v71";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -853,10 +863,24 @@ function face(value,label,opts){
     (opts.color?" style='color:"+opts.color+"'":"")+">"+v+"</div>"+
     (label?"<div class='tl'>"+label+"</div>":"")+
     (opts.sub?"<div class='tl sub'>"+opts.sub+"</div>":"")+
+    (opts.batt&&opts.batt.pct>=0?battBar(opts.batt.pct):"")+
     (opts.dots&&opts.dots.length
       ? "<div class='dots'>"+opts.dots.slice(0,8).map(c=>
           "<i style='background:"+c+"'></i>").join("")+"</div>"
       : "");
+}
+/* Red at empty, through yellow, to green at full. Continuous rather than
+   three steps, for the same reason tempColor() interpolates: the quantity
+   is continuous, and a bar that jumps from green to yellow at some hidden
+   threshold tells you less than one that has been visibly draining. */
+function battColor(pct){
+  const p=Math.max(0,Math.min(100,pct));
+  return "hsl("+Math.round(p*1.2)+",72%,46%)";
+}
+function battBar(pct,wide){
+  const p=Math.max(0,Math.min(100,pct));
+  return "<div class='batt"+(wide?" wide":"")+"'><i style='width:"+p+
+    "%;background:"+battColor(p)+"'></i></div>";
 }
 /* tileTitle lets a card keep a rich stage header ("EDMONTON · ATHENS")
    while the 118px tile shows something that actually fits */
@@ -3263,8 +3287,34 @@ const cardDevice={
       ctx.rerender();
     };
     poll();setInterval(poll,3000);
+    /* Outside the app there is no bridge, so fall back to the Battery
+       Status API. It is deprecated and gone from some browsers, but this
+       WebView is Chromium and it costs nothing to try; the card simply
+       shows no battery if it is absent. */
+    if(!(window.AmbientHost&&AmbientHost.stats)&&navigator.getBattery){
+      try{
+        navigator.getBattery().then(b=>{
+          const set=()=>{
+            this._webBatt={pct:Math.round(b.level*100),charging:!!b.charging};
+            ctx.rerender();
+          };
+          set();
+          b.addEventListener("levelchange",set);
+          b.addEventListener("chargingchange",set);
+        }).catch(()=>{});
+      }catch(e){}
+    }
   },
   _g(kb){return (kb/1048576).toFixed(1)},
+  /* -1 from the bridge means the box HAS no battery - a mains-powered
+     device reports EXTRA_PRESENT=0 - which is a different answer from
+     "flat" and must not draw an empty red cell. */
+  _batt(){
+    const s=this._s;
+    if(s&&typeof s.batt==="number"&&s.batt>=0)
+      return{pct:s.batt,charging:!!s.charging};
+    return this._webBatt||null;
+  },
   _bar(pct,col){
     return "<div style='height:6px;background:var(--faint);border-radius:3px;"+
       "overflow:hidden;margin-top:6px'><div style='height:100%;width:"+
@@ -3285,7 +3335,13 @@ const cardDevice={
     /* against ONE core, which is what the figure measures */
     const cpct=Math.min(100,cpu);
     const warm=mpct>85?"var(--down)":mpct>70?"var(--warn)":"var(--up)";
-    return "<div class='row'><span class='lbl'>MEMORY</span>"+
+    const b=this._batt();
+    return (b?"<div class='row'><span class='lbl'>BATTERY</span>"+
+      "<span class='val' style='color:"+battColor(b.pct)+"'>"+b.pct+"%"+
+      (b.charging?" ⚡":"")+"</span></div>"+battBar(b.pct,true)+
+      "<div class='lbl' style='margin:4px 0 16px'>"+
+      (b.charging?"charging":"on battery")+"</div>":"")+
+      "<div class='row'><span class='lbl'>MEMORY</span>"+
       "<span class='val'>"+this._g(used)+" / "+this._g(s.totalKb)+
       " GB</span></div>"+this._bar(mpct,warm)+
       "<div class='lbl' style='margin-top:4px'>"+this._g(s.availKb)+
@@ -3299,8 +3355,13 @@ const cardDevice={
       "</div>";
   },
   renderCompact(ctx){
-    const s=this._s;
-    if(!s)return face("—","host only");
+    const s=this._s,b=this._batt();
+    if(!s&&!b)return face("—","host only");
+    /* Battery leads when there is one. On a device you carry, "how long
+       have I got" beats a CPU percentage as the thing worth a glance, and
+       the bar is readable at 118px in a way a second number would not be. */
+    if(b)return face(b.pct+"%",b.charging?"charging":"battery",
+      {batt:b,sub:s&&s.cpu>=0?"cpu "+s.cpu.toFixed(0)+"%":""});
     const cpu=s.cpu>=0?s.cpu.toFixed(0)+"%":"—";
     return face(cpu,"cpu",{sub:this._g(s.availKb)+" GB free"});
   }

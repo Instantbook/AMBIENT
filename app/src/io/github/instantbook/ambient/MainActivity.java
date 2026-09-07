@@ -357,9 +357,40 @@ public class MainActivity extends Activity {
                 lastWallMs = wallMs;
             } catch (Throwable t) { /* leave cpu at -1 = unknown */ }
 
+            // Battery, from the sticky ACTION_BATTERY_CHANGED broadcast.
+            // registerReceiver(null, filter) just reads the last one - no
+            // permission, no receiver left registered, cheap enough for the
+            // card's three-second poll. A box running on mains reports
+            // EXTRA_PRESENT=0, and -1 then means "no battery here" rather
+            // than "flat", which the card has to be able to tell apart.
+            int batt = -1;
+            boolean charging = false;
+            try {
+                android.content.Intent bi = registerReceiver(null,
+                        new android.content.IntentFilter(
+                                android.content.Intent.ACTION_BATTERY_CHANGED));
+                if (bi != null) {
+                    int level = bi.getIntExtra(
+                            android.os.BatteryManager.EXTRA_LEVEL, -1);
+                    int scale = bi.getIntExtra(
+                            android.os.BatteryManager.EXTRA_SCALE, -1);
+                    boolean present = bi.getBooleanExtra(
+                            android.os.BatteryManager.EXTRA_PRESENT, true);
+                    if (present && level >= 0 && scale > 0)
+                        batt = Math.round(level * 100f / scale);
+                    int st = bi.getIntExtra(
+                            android.os.BatteryManager.EXTRA_STATUS, -1);
+                    charging =
+                        st == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                     || st == android.os.BatteryManager.BATTERY_STATUS_FULL;
+                }
+            } catch (Throwable t) { /* leave batt at -1 = unknown */ }
+
             return "{\"totalKb\":" + totalKb
                  + ",\"availKb\":" + availKb
                  + ",\"cpu\":" + String.format(java.util.Locale.US, "%.1f", cpu)
+                 + ",\"batt\":" + batt
+                 + ",\"charging\":" + charging
                  + ",\"cores\":" + Runtime.getRuntime().availableProcessors()
                  + ",\"model\":\"" + Build.MODEL.replace("\"", "") + "\"}";
         }
