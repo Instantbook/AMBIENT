@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v71";
+const APP_VERSION="v72";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1548,7 +1548,7 @@ const cardMarkets={
     {key:"fx",origin:"direct",path:"https://open.er-api.com/v6/latest/CAD"},
     {key:"crypto",origin:"direct",path:
       "https://api.coingecko.com/api/v3/simple/price"+
-      "?ids=bitcoin,ethereum&vs_currencies=cad&include_24hr_change=true"}
+      "?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"}
   ],
   _hist(ctx,sym,val){
     const h=ctx.storage.get("hist",{});
@@ -1573,15 +1573,19 @@ const cardMarkets={
     }
     if(cr&&cr.bitcoin){
       const coin=(id,sym)=>{
-        const c=cr[id],ch=c.cad_24h_change||0;
-        const hist=this._hist(ctx,sym,c.cad);
+        const c=cr[id],ch=c.usd_24h_change||0;
+        /* Keyed by currency: the stored series is a plain list of numbers
+           with no units, so switching CAD -> USD would have appended
+           US prices onto a Canadian history and drawn a cliff in the
+           sparkline that never happened. */
+        const hist=this._hist(ctx,sym+"usd",c.usd);
         return "<div class='row'><span class='lbl'>"+sym+
           " <span class='"+(ch>=0?"delta-up":"delta-down")+"'>"+
           (ch>=0?"▲":"▼")+Math.abs(ch).toFixed(1)+"%</span></span>"+
           "<span>"+sparkline(hist,64,16)+
           " <span class='val' style='color:"+
-          (ch>=0?"var(--up)":"var(--down)")+"'>$"+
-          Math.round(c.cad).toLocaleString()+"</span></span></div>";
+          (ch>=0?"var(--up)":"var(--down)")+"'>US$"+
+          Math.round(c.usd).toLocaleString()+"</span></span></div>";
       };
       rows+=coin("bitcoin","BTC")+coin("ethereum","ETH");
     }
@@ -1595,8 +1599,8 @@ const cardMarkets={
     const rows=[];
     if(fx&&fx.rates)rows.push(["EUR",fx.rates.EUR.toFixed(3),""]);
     if(cr&&cr.bitcoin){
-      const ch=cr.bitcoin.cad_24h_change||0;
-      rows.push(["BTC","$"+Math.round(cr.bitcoin.cad/1000)+"k",
+      const ch=cr.bitcoin.usd_24h_change||0;
+      rows.push(["BTC","US$"+Math.round(cr.bitcoin.usd/1000)+"k",
         ch>=0?"var(--up)":"var(--down)"]);
     }
     if(!rows.length)return face("—","awaiting data");
@@ -3287,11 +3291,14 @@ const cardDevice={
       ctx.rerender();
     };
     poll();setInterval(poll,3000);
-    /* Outside the app there is no bridge, so fall back to the Battery
-       Status API. It is deprecated and gone from some browsers, but this
-       WebView is Chromium and it costs nothing to try; the card simply
-       shows no battery if it is absent. */
-    if(!(window.AmbientHost&&AmbientHost.stats)&&navigator.getBattery){
+    /* Tried ALWAYS, not just outside the app: an APK older than the
+       battery field in stats() reports no level, and this is what makes
+       the tile work there anyway rather than waiting on a reinstall.
+       _batt() prefers the bridge when it has an answer. The API is
+       deprecated and absent from some browsers; this WebView is Chromium
+       and it costs nothing to ask, so the card simply shows no battery
+       when neither source has one. */
+    if(navigator.getBattery){
       try{
         navigator.getBattery().then(b=>{
           const set=()=>{
