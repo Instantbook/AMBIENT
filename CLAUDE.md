@@ -126,6 +126,33 @@ tracking, so nothing AR-shaped is possible by design.
 - **Verified working on hardware**: every card. Radio and local music both play with a real FFT driving the
   visualiser, headlines and Greek stations come through the deployed Worker, and the companion relay pairs.
 
+### The battery is not where Android keeps batteries
+
+**Every standard battery API returns placeholders on this box.** Verified over ADB:
+`/sys/class/power_supply/` is **empty**, the health HAL reports `present: false`, and
+`dumpsys battery` gives `level: 50`, `voltage: 4`, `Charge counter: 10`, `status`/`health` both
+UNKNOWN. So `BatteryManager.BATTERY_PROPERTY_CAPACITY` and `ACTION_BATTERY_CHANGED` both come
+back with nothing usable (`-1` in the bridge), while the device's own settings screen happily
+shows a real percentage.
+
+The level is read off an MCU over a serial link — note `com.sei.serialportservice` — and the
+vendor publishes it into **`Settings.Global`**:
+
+| key | meaning |
+|---|---|
+| `battery` | level 0-100 (the real one) |
+| `battery_discharging` | `0` = on the charger, `1` = on battery |
+| `battery_temperature` | °C |
+
+Plain readable settings: no permission, no vendor SDK. `stats()` prefers this and keeps the
+standard APIs only as fallbacks for other hardware. Confirmed on device: bridge reported 54
+while `settings get global battery` said 54.
+
+**Do not "fix" a stuck battery reading by reaching for BatteryManager** — that is the road that
+produced a tile frozen at 100%. And note the web `navigator.getBattery()` is worse than useless
+here: browsers coarsen it against fingerprinting, and it reported a flat 100% against a real 57%,
+so it is used *only* when there is no host bridge at all.
+
 ### The cursor problem (why `app/` exists)
 
 **`com.tcl.browser` drives pages with a virtual mouse cursor and never forwards arrow keys to the page.**

@@ -415,9 +415,40 @@ public class MainActivity extends Activity {
                 }
             } catch (Throwable t) { /* properties are optional */ }
 
-            // Prefer the live gauge; fall back to the broadcast.
+            // THE ONLY SOURCE THAT WORKS ON THIS BOX.
+            //
+            // Measured over ADB: /sys/class/power_supply is empty, the
+            // health HAL reports present=false, and dumpsys battery returns
+            // placeholders - level 50, voltage 4, charge counter 10, status
+            // and health both UNKNOWN. So every standard API above is
+            // reading a battery that Android does not believe exists, which
+            // is why the tile sat at a fixed number while the device's own
+            // settings showed the level dropping.
+            //
+            // The real value comes off an MCU over a serial link (see
+            // com.sei.serialportservice) and the vendor publishes it into
+            // Settings.Global as "battery", with "battery_discharging" as
+            // the charge state. Both are plain readable settings - no
+            // permission, no vendor SDK.
+            int battVendor = -1, vendorDischarging = -1;
+            try {
+                android.content.ContentResolver cr = getContentResolver();
+                battVendor = android.provider.Settings.Global.getInt(
+                        cr, "battery", -1);
+                if (battVendor < 0 || battVendor > 100) battVendor = -1;
+                vendorDischarging = android.provider.Settings.Global.getInt(
+                        cr, "battery_discharging", -1);
+            } catch (Throwable t) { /* not this device: fall through */ }
+
+            // Vendor first, then the live gauge, then the broadcast.
             int battBcast = batt;
             if (battProp >= 0) batt = battProp;
+            if (battVendor >= 0) {
+                batt = battVendor;
+                // 0 = not discharging = on the charger, which matches what
+                // dumpsys reports for AC power on this box.
+                if (vendorDischarging >= 0) charging = vendorDischarging == 0;
+            }
 
             return "{\"totalKb\":" + totalKb
                  + ",\"availKb\":" + availKb
@@ -425,6 +456,7 @@ public class MainActivity extends Activity {
                  + ",\"batt\":" + batt
                  + ",\"battBcast\":" + battBcast
                  + ",\"battProp\":" + battProp
+                 + ",\"battVendor\":" + battVendor
                  + ",\"chargeUah\":" + chargeUah
                  + ",\"voltmV\":" + voltmV
                  + ",\"charging\":" + charging
