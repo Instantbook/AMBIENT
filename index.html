@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v76";
+const APP_VERSION="v77";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -295,6 +295,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.scenes","ambient.room",
   "ambient.card.launch.links","ambient.card.vis.style",
   "ambient.card.radio.favs","ambient.card.video.pos",
+  "ambient.card.video.recent",
   "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
@@ -2954,14 +2955,44 @@ const cardVideo={
     return h?h+":"+String(m%60).padStart(2,"0")+":"+String(s%60).padStart(2,"0")
             :m+":"+String(s%60).padStart(2,"0");
   },
+  /* Videos you are part way through, newest first. Coming back to a film
+     should not mean walking the library to find it again - and the library
+     is a tree, so "where was I" is several presses deep. Only files with a
+     saved position appear: one finished, or barely started, has nothing to
+     come back to. */
+  _recentRows(){
+    const ctx=this._ctx;
+    if(!ctx)return [];
+    let ids=ctx.storage.get("recent",[]);
+    if(!Array.isArray(ids)||!ids.length)return [];
+    const pos=this._positions(ctx),byId={};
+    this._all().forEach(v=>{byId[v.id]=v});
+    const out=[];
+    ids.forEach(id=>{
+      if(out.length>=3)return;
+      const v=byId[id],at=pos[id];
+      /* the file may have been deleted, or watched to the end since */
+      if(!v||!at)return;
+      out.push({label:v.name||v.file||"video",video:v,resume:true,
+        meta:"▸ "+this._dur(at*1000)+" / "+this._dur(v.dur)});
+    });
+    return out;
+  },
+  _touch(ctx,id){
+    if(!ctx||!id)return;
+    let ids=ctx.storage.get("recent",[]);
+    if(!Array.isArray(ids))ids=[];
+    ids=[id].concat(ids.filter(x=>x!==id)).slice(0,8);
+    ctx.storage.set("recent",ids);
+  },
   _rows(){
     if(this._level==="folders")
-      return this._folders().map(d=>{
+      return this._recentRows().concat(this._folders().map(d=>{
         const ss=this._seasons(d);
         return {label:d,dir:d,
           meta:ss.length>1?ss.length+" seasons"
             :this._inDir(d).length+" videos"};
-      });
+      }));
     if(this._level==="seasons")
       return this._seasons(this._dir).map(s=>({label:s,season:s,
         meta:this._inDir(this._dir,s).length+" videos"}));
@@ -3009,6 +3040,7 @@ const cardVideo={
     /* one thing plays at a time: a video with radio underneath it is a
        fault, not a feature */
     try{audioBus.stop()}catch(e){}
+    this._touch(ctx,v.id);
     this._playing=v;this._note="";
     mode="full";render();this._wire(ctx);
   },
@@ -3424,8 +3456,12 @@ const cardDevice={
        single rounded number - the charge counter and the two sources
        distinguish them. */
     const fine=[];
-    if(s&&s.chargeUah>0)fine.push((s.chargeUah/1000).toFixed(0)+" mAh left");
-    if(s&&s.voltmV>0)fine.push((s.voltmV/1000).toFixed(2)+" V");
+    if(s&&s.battTempC>-50)fine.push(s.battTempC+"°C");
+    /* Only shown if they are real. This box answers the standard battery
+       APIs with placeholders - charge counter 10, voltage 4 - so printing
+       them would be printing noise; other hardware fills them in. */
+    if(s&&s.chargeUah>1000)fine.push((s.chargeUah/1000).toFixed(0)+" mAh left");
+    if(s&&s.voltmV>1000)fine.push((s.voltmV/1000).toFixed(2)+" V");
     if(s&&s.battProp>=0&&s.battBcast>=0&&s.battProp!==s.battBcast)
       fine.push("gauge "+s.battProp+"% · cached "+s.battBcast+"%");
     return (!b&&this._battStale()

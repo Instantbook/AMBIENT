@@ -430,7 +430,7 @@ public class MainActivity extends Activity {
             // Settings.Global as "battery", with "battery_discharging" as
             // the charge state. Both are plain readable settings - no
             // permission, no vendor SDK.
-            int battVendor = -1, vendorDischarging = -1;
+            int battVendor = -1, vendorDischarging = -1, battTempC = -1;
             try {
                 android.content.ContentResolver cr = getContentResolver();
                 battVendor = android.provider.Settings.Global.getInt(
@@ -438,6 +438,15 @@ public class MainActivity extends Activity {
                 if (battVendor < 0 || battVendor > 100) battVendor = -1;
                 vendorDischarging = android.provider.Settings.Global.getInt(
                         cr, "battery_discharging", -1);
+                // Plain degrees here, NOT the tenths that
+                // EXTRA_TEMPERATURE uses - measured 41 on a charging pack,
+                // which is 41 C and not 4.1. Anything big enough to have
+                // been tenths is divided, so other hardware still reads
+                // sensibly.
+                int t = android.provider.Settings.Global.getInt(
+                        cr, "battery_temperature", -999);
+                if (t > 200) battTempC = Math.round(t / 10f);
+                else if (t > -50 && t < 150) battTempC = t;
             } catch (Throwable t) { /* not this device: fall through */ }
 
             // Vendor first, then the live gauge, then the broadcast.
@@ -457,6 +466,7 @@ public class MainActivity extends Activity {
                  + ",\"battBcast\":" + battBcast
                  + ",\"battProp\":" + battProp
                  + ",\"battVendor\":" + battVendor
+                 + ",\"battTempC\":" + battTempC
                  + ",\"chargeUah\":" + chargeUah
                  + ",\"voltmV\":" + voltmV
                  + ",\"charging\":" + charging
