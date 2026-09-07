@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v75";
+const APP_VERSION="v76";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3354,14 +3354,15 @@ const cardDevice={
       ctx.rerender();
     };
     poll();setInterval(poll,3000);
-    /* Tried ALWAYS, not just outside the app: an APK older than the
-       battery field in stats() reports no level, and this is what makes
-       the tile work there anyway rather than waiting on a reinstall.
-       _batt() prefers the bridge when it has an answer. The API is
-       deprecated and absent from some browsers; this WebView is Chromium
-       and it costs nothing to ask, so the card simply shows no battery
-       when neither source has one. */
-    if(navigator.getBattery){
+    /* ONLY outside the app. Letting this run inside it as well was meant
+       to save waiting for an APK install, and instead put a confidently
+       wrong number on screen: the Battery Status API is deliberately
+       coarsened against fingerprinting, and it sat at a flat 100% while
+       the device's own settings read 57%. In the app the bridge is the
+       only source that talks to the fuel gauge, so it is the only one
+       trusted; a plain browser still gets the rough figure, which is
+       better than nothing when there is no bridge at all. */
+    if(!(hostBridge&&hostBridge.stats)&&navigator.getBattery){
       try{
         navigator.getBattery().then(b=>{
           const set=()=>{
@@ -3383,7 +3384,18 @@ const cardDevice={
     const s=this._s;
     if(s&&typeof s.batt==="number"&&s.batt>=0)
       return{pct:s.batt,charging:!!s.charging};
+    /* In the app, the bridge is the only source that reaches the fuel
+       gauge. If it has no answer the honest result is no battery at all,
+       not the browser's rounded guess. */
+    if(hostBridge&&hostBridge.stats)return null;
     return this._webBatt||null;
+  },
+  /* An APK older than the battery field answers stats() without one, and
+     the card would otherwise just silently lose the battery with no clue
+     why. */
+  _battStale(){
+    const s=this._s;
+    return !!(s&&typeof s.batt!=="number");
   },
   _bar(pct,col){
     return "<div style='height:6px;background:var(--faint);border-radius:3px;"+
@@ -3416,7 +3428,11 @@ const cardDevice={
     if(s&&s.voltmV>0)fine.push((s.voltmV/1000).toFixed(2)+" V");
     if(s&&s.battProp>=0&&s.battBcast>=0&&s.battProp!==s.battBcast)
       fine.push("gauge "+s.battProp+"% · cached "+s.battBcast+"%");
-    return (b?"<div class='row'><span class='lbl'>BATTERY</span>"+
+    return (!b&&this._battStale()
+      ?"<div class='lbl' style='margin-bottom:16px;color:var(--warn)'>"+
+       "battery needs the updated app — this build's bridge reports none"+
+       "</div>":"")+
+      (b?"<div class='row'><span class='lbl'>BATTERY</span>"+
       "<span class='val' style='color:"+battColor(b.pct)+"'>"+b.pct+"%"+
       (b.charging?" ⚡":"")+"</span></div>"+battBar(b.pct,true)+
       "<div class='lbl' style='margin:4px 0 16px'>"+
