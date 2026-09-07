@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v73";
+const APP_VERSION="v74";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1030,7 +1030,16 @@ function renderCard(card){
     try{
       const out=card.render(ctxFor(card),card._data||{});
       if(typeof out==="string")host.innerHTML=out;
-      else if(out instanceof Node){host.innerHTML="";host.appendChild(out)}
+      /* A card that returns the SAME node twice means "this is still the
+         thing you already have" - reattaching it would be destructive, and
+         for a <video> especially so: removing a media element from the
+         document pauses it, so a repaint would stutter playback. Leave it
+         exactly where it is when nothing has changed. */
+      else if(out instanceof Node){
+        if(host.firstChild!==out||host.childNodes.length!==1){
+          host.innerHTML="";host.appendChild(out);
+        }
+      }
     }catch(e){host.innerHTML="<div class='state'>render error</div>";
       console.warn("render fail",card.id,e)}
     /* Optional pinned footer, below the scroll rather than inside it. A
@@ -3024,8 +3033,35 @@ const cardVideo={
     if(keys.length>120)keys.slice(0,keys.length-120).forEach(k=>delete p[k]);
     ctx.storage.set("pos",p);
   },
-  /* Wire the element after it exists. render() returns a string, so the
-     listeners cannot be attached inside it. */
+  /* The player is built ONCE per video and handed back on every render.
+     Returning markup instead meant the shell replaced the stage body and
+     with it the <video> - a fresh element at time zero, holding none of
+     the listeners and none of the buffer. Returning the same node lets
+     the shell recognise it and leave it alone. */
+  _playerNode(v){
+    if(this._node&&this._nodeId===v.id)return this._node;
+    const wrap=document.createElement("div");
+    wrap.style.cssText="position:relative;width:100%;height:100%";
+    const el=document.createElement("video");
+    el.id="vid-el";
+    el.autoplay=true;el.preload="auto";
+    el.setAttribute("playsinline","");
+    el.style.cssText=
+      "width:100%;height:100%;object-fit:contain;background:#000";
+    el.src=this._url(v);
+    const osd=document.createElement("div");
+    osd.id="vid-osd";
+    osd.style.cssText="position:absolute;left:0;right:0;bottom:8%;"+
+      "text-align:center;font-family:var(--mono);font-size:15px;"+
+      "letter-spacing:.12em;color:#fff;text-shadow:0 0 6px #000;"+
+      "opacity:0;transition:opacity .25s";
+    wrap.appendChild(el);wrap.appendChild(osd);
+    this._node=wrap;this._nodeId=v.id;
+    return wrap;
+  },
+  /* Wire the element after it exists. render() cannot attach listeners
+     itself, since the node is not in the document until the shell puts
+     it there. */
   _wire(ctx){
     setTimeout(()=>{
       const el=document.getElementById("vid-el");
@@ -3034,8 +3070,14 @@ const cardVideo={
       el._wired=true;
       const saved=this._positions(ctx)[v.id];
       const resume=()=>{
+        /* Once per VIDEO, not once per element. A seek that can fire again
+           is a seek that can fight the player: land, play a few seconds,
+           get yanked back to the same mark, forever. The flag makes that
+           impossible however many times this is wired. */
+        if(this._resumedFor===v.id)return;
         if(!saved||!isFinite(el.duration)||el.duration<=0)return;
         if(saved>=el.duration*this._RESUME_END)return;
+        this._resumedFor=v.id;
         try{el.currentTime=saved}catch(e){}
         const osd=document.getElementById("vid-osd");
         if(osd){
@@ -3046,12 +3088,19 @@ const cardVideo={
             catch(e){}},2600);
         }
       };
-      /* The metadata may ALREADY have arrived by the time this runs - the
-         file is served by the app itself, so it can be ready before the
-         listener exists, and then the event never comes and the resume is
-         silently skipped. readyState >= HAVE_METADATA says so. */
-      if(el.readyState>=1)resume();
-      else el.addEventListener("loadedmetadata",resume,{once:true});
+      /* Seek when the player can actually PLAY, not merely when it knows
+         the duration. Seeking at loadedmetadata asks a pipeline that has
+         not buffered anything yet to jump, and on a long file served over
+         range requests that is the moment it is least able to. Both events
+         are listened for and the flag above makes the double harmless -
+         canplay usually wins, and metadata is the safety net for a file
+         that stalls and would otherwise never resume at all. */
+      if(el.readyState>=3)resume();
+      else{
+        el.addEventListener("canplay",resume,{once:true});
+        el.addEventListener("loadedmetadata",
+          ()=>setTimeout(resume,400),{once:true});
+      }
       let last=0;
       el.addEventListener("timeupdate",()=>{
         const now=Date.now();
@@ -3097,6 +3146,11 @@ const cardVideo={
       try{el.pause();el.removeAttribute("src");el.load()}catch(e){}
     }
     clearTimeout(this._flashT);
+    /* Drop the cached player with the playback it belonged to. Keeping it
+       would hand a torn-down element back to the next render, and leaving
+       _resumedFor set would stop the SAME film resuming if you came back
+       to it later - which is the main thing resume is for. */
+    this._node=null;this._nodeId=null;this._resumedFor=null;
     this._playing=null;
   },
   /* Climb, skipping on the way up exactly the levels skipped coming down */
@@ -3135,16 +3189,9 @@ const cardVideo={
          applied and nothing left to record the position either: it
          started from the beginning and then forgot where it had been.
          _wire() is idempotent per element, so calling it here is free. */
+      const node=this._playerNode(v);
       this._wire(ctx);
-      return "<div style='position:relative;width:100%;height:100%'>"+
-        "<video id='vid-el' src='"+esc(this._url(v))+"' autoplay "+
-        "playsinline preload='auto' "+
-        "style='width:100%;height:100%;object-fit:contain;"+
-        "background:#000'></video>"+
-        "<div id='vid-osd' style='position:absolute;left:0;right:0;"+
-        "bottom:8%;text-align:center;font-family:var(--mono);font-size:15px;"+
-        "letter-spacing:.12em;color:#fff;text-shadow:0 0 6px #000;"+
-        "opacity:0;transition:opacity .25s'></div></div>";
+      return node;
     }
     if(!this._all().length)
       return "<div class='state'>No video in the media library yet. "+
