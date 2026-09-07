@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v72";
+const APP_VERSION="v73";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3033,19 +3033,25 @@ const cardVideo={
       if(!el||!v||el._wired)return;
       el._wired=true;
       const saved=this._positions(ctx)[v.id];
-      el.addEventListener("loadedmetadata",()=>{
-        if(saved&&isFinite(el.duration)&&saved<el.duration*this._RESUME_END){
-          try{el.currentTime=saved}catch(e){}
-          const osd=document.getElementById("vid-osd");
-          if(osd){
-            osd.textContent="resumed "+this._dur(saved*1000)+"   ◄ back 5 min";
-            osd.style.opacity="1";
-            clearTimeout(this._flashT);
-            this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}
-              catch(e){}},2600);
-          }
+      const resume=()=>{
+        if(!saved||!isFinite(el.duration)||el.duration<=0)return;
+        if(saved>=el.duration*this._RESUME_END)return;
+        try{el.currentTime=saved}catch(e){}
+        const osd=document.getElementById("vid-osd");
+        if(osd){
+          osd.textContent="resumed "+this._dur(saved*1000)+"   ◄ back 5 min";
+          osd.style.opacity="1";
+          clearTimeout(this._flashT);
+          this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}
+            catch(e){}},2600);
         }
-      });
+      };
+      /* The metadata may ALREADY have arrived by the time this runs - the
+         file is served by the app itself, so it can be ready before the
+         listener exists, and then the event never comes and the resume is
+         silently skipped. readyState >= HAVE_METADATA says so. */
+      if(el.readyState>=1)resume();
+      else el.addEventListener("loadedmetadata",resume,{once:true});
       let last=0;
       el.addEventListener("timeupdate",()=>{
         const now=Date.now();
@@ -3120,6 +3126,16 @@ const cardVideo={
         "page has no filesystem to read.</div>";
     if(this._playing){
       const v=this._playing;
+      /* Re-wire on EVERY render, not just when playback starts. render()
+         returns a string, so the shell replaces the whole stage body and
+         with it the <video> element - a fresh one, at time zero, carrying
+         none of the listeners. _enter() was the only thing that wired it,
+         so leaving the card by any route other than BACK (which stops
+         playback) and coming back rebuilt the element with no resume
+         applied and nothing left to record the position either: it
+         started from the beginning and then forgot where it had been.
+         _wire() is idempotent per element, so calling it here is free. */
+      this._wire(ctx);
       return "<div style='position:relative;width:100%;height:100%'>"+
         "<video id='vid-el' src='"+esc(this._url(v))+"' autoplay "+
         "playsinline preload='auto' "+
