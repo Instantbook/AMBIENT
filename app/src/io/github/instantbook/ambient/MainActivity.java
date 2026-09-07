@@ -363,7 +363,8 @@ public class MainActivity extends Activity {
             // card's three-second poll. A box running on mains reports
             // EXTRA_PRESENT=0, and -1 then means "no battery here" rather
             // than "flat", which the card has to be able to tell apart.
-            int batt = -1;
+            int batt = -1, battProp = -1, voltmV = -1;
+            long chargeUah = -1;
             boolean charging = false;
             try {
                 android.content.Intent bi = registerReceiver(null,
@@ -383,13 +384,49 @@ public class MainActivity extends Activity {
                     charging =
                         st == android.os.BatteryManager.BATTERY_STATUS_CHARGING
                      || st == android.os.BatteryManager.BATTERY_STATUS_FULL;
+                    voltmV = bi.getIntExtra(
+                            android.os.BatteryManager.EXTRA_VOLTAGE, -1);
                 }
             } catch (Throwable t) { /* leave batt at -1 = unknown */ }
+
+            // The broadcast above is a CACHED snapshot the framework
+            // re-sends; BatteryManager's properties query the fuel gauge
+            // itself. On a device whose own indicator had visibly dropped
+            // while EXTRA_LEVEL still said full, the cached value is the
+            // prime suspect, so the live capacity wins when it answers.
+            //
+            // CHARGE_COUNTER is the honest fine-grained number - microamp
+            // hours actually left, not a percentage someone rounded - and
+            // is reported alongside so the card can show what the gauge
+            // really knows rather than a figure quantised to whole
+            // percent, or to whatever step this box's driver uses.
+            try {
+                android.os.BatteryManager bm = (android.os.BatteryManager)
+                        getSystemService(Context.BATTERY_SERVICE);
+                if (bm != null) {
+                    int cap = bm.getIntProperty(android.os.BatteryManager
+                            .BATTERY_PROPERTY_CAPACITY);
+                    // unsupported properties come back as 0 or
+                    // Integer.MIN_VALUE, neither of which is a level
+                    if (cap > 0 && cap <= 100) battProp = cap;
+                    long cc = bm.getLongProperty(android.os.BatteryManager
+                            .BATTERY_PROPERTY_CHARGE_COUNTER);
+                    if (cc > 0 && cc < Long.MAX_VALUE) chargeUah = cc;
+                }
+            } catch (Throwable t) { /* properties are optional */ }
+
+            // Prefer the live gauge; fall back to the broadcast.
+            int battBcast = batt;
+            if (battProp >= 0) batt = battProp;
 
             return "{\"totalKb\":" + totalKb
                  + ",\"availKb\":" + availKb
                  + ",\"cpu\":" + String.format(java.util.Locale.US, "%.1f", cpu)
                  + ",\"batt\":" + batt
+                 + ",\"battBcast\":" + battBcast
+                 + ",\"battProp\":" + battProp
+                 + ",\"chargeUah\":" + chargeUah
+                 + ",\"voltmV\":" + voltmV
                  + ",\"charging\":" + charging
                  + ",\"cores\":" + Runtime.getRuntime().availableProcessors()
                  + ",\"model\":\"" + Build.MODEL.replace("\"", "") + "\"}";

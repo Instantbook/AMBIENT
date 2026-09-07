@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v74";
+const APP_VERSION="v75";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3406,11 +3406,22 @@ const cardDevice={
     const cpct=Math.min(100,cpu);
     const warm=mpct>85?"var(--down)":mpct>70?"var(--warn)":"var(--up)";
     const b=this._batt();
+    /* What the gauge actually knows, under the percentage. A level that
+       sits at 100 while the device's own lights have dropped is either a
+       coarse driver or a stale reading, and the two look identical from a
+       single rounded number - the charge counter and the two sources
+       distinguish them. */
+    const fine=[];
+    if(s&&s.chargeUah>0)fine.push((s.chargeUah/1000).toFixed(0)+" mAh left");
+    if(s&&s.voltmV>0)fine.push((s.voltmV/1000).toFixed(2)+" V");
+    if(s&&s.battProp>=0&&s.battBcast>=0&&s.battProp!==s.battBcast)
+      fine.push("gauge "+s.battProp+"% · cached "+s.battBcast+"%");
     return (b?"<div class='row'><span class='lbl'>BATTERY</span>"+
       "<span class='val' style='color:"+battColor(b.pct)+"'>"+b.pct+"%"+
       (b.charging?" ⚡":"")+"</span></div>"+battBar(b.pct,true)+
       "<div class='lbl' style='margin:4px 0 16px'>"+
-      (b.charging?"charging":"on battery")+"</div>":"")+
+      (b.charging?"charging":"on battery")+
+      (fine.length?" · "+fine.join(" · "):"")+"</div>":"")+
       "<div class='row'><span class='lbl'>MEMORY</span>"+
       "<span class='val'>"+this._g(used)+" / "+this._g(s.totalKb)+
       " GB</span></div>"+this._bar(mpct,warm)+
