@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v85";
+const APP_VERSION="v86";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1037,6 +1037,12 @@ function rowWindow(card,rows,sel){
   card._winTotal=rows.length;
   return{start:st,items:rows.slice(st,st+span)};
 }
+function refreshTiles(card){
+  ["fr","ov"].forEach(tag=>{
+    const t=document.querySelector("#"+tag+"-"+card.id+" .tbody");
+    if(t)t.innerHTML=compactOf(card);
+  });
+}
 function renderCard(card){
   /* stage body if this card is the one loaded in the main window */
   if(mode!=="overview"&&stagedIs(card)){
@@ -1047,7 +1053,13 @@ function renderCard(card){
        than the sentence someone is halfway through typing. */
     const act=document.activeElement;
     if(act&&host&&host.contains(act)&&
-       (act.tagName==="INPUT"||act.tagName==="TEXTAREA"))return;
+       (act.tagName==="INPUT"||act.tagName==="TEXTAREA")){
+      /* Skip the BODY only. Returning outright also skipped the tile, and
+         worse, it meant a field that kept focus after submitting blocked
+         every later repaint of the card - so search results were fetched
+         and never drawn, which looks exactly like search doing nothing. */
+      refreshTiles(card);return;
+    }
     try{
       const out=card.render(ctxFor(card),card._data||{});
       if(typeof out==="string")host.innerHTML=out;
@@ -1093,10 +1105,7 @@ function renderCard(card){
     }
   }
   /* refresh this card's tile wherever it appears */
-  ["fr","ov"].forEach(tag=>{
-    const t=document.querySelector("#"+tag+"-"+card.id+" .tbody");
-    if(t)t.innerHTML=compactOf(card);
-  });
+  refreshTiles(card);
 }
 
 /* ---------------- refresh scheduler ---------------- */
@@ -1187,6 +1196,12 @@ window.__ambientRelaunch=function(){
 addEventListener("keydown",e=>{
   if(e.target&&e.target.tagName==="INPUT"){
     if(e.key==="Escape"||e.key==="GoBack"){e.target.blur();e.preventDefault()}
+    /* The on-screen keyboard's accept key arrives as Enter, and a lone
+       input outside a <form> does not reliably fire "change" from it.
+       Blurring commits the value, closes the keyboard, and releases the
+       repaint guard above - all three of which have to happen for a search
+       to run AND be visible. */
+    if(e.key==="Enter"){e.preventDefault();e.target.blur()}
     return;
   }
   const map={ArrowLeft:"left",ArrowRight:"right",ArrowUp:"up",
@@ -2498,6 +2513,7 @@ const cardLaunch={
     document.addEventListener("change",e=>{
       if(e.target&&e.target.id==="launch-in"&&e.target.value.trim()){
         const v=e.target.value.trim();e.target.value="";
+        try{e.target.blur()}catch(_){}
         this._add(ctx,v);
       }
     });
@@ -2976,6 +2992,7 @@ const cardPodcasts={
     document.addEventListener("change",e=>{
       if(e.target&&e.target.id==="pod-in"&&e.target.value.trim()){
         const q=e.target.value.trim();e.target.value="";
+        try{e.target.blur()}catch(_){}
         this._search(ctx,q);
       }
     });
