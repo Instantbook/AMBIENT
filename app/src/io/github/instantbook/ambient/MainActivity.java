@@ -1009,15 +1009,28 @@ public class MainActivity extends Activity {
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        // THIS is the path the shortcut button actually takes, verified on
+        // hardware: pressing it while AMBIENT is already in front toggles
+        // the lock from here, and onKeyDown never sees a key at all - the
+        // system consumes KEY_COPY to perform the launch and delivers the
+        // launch here instead.
+        //
+        // Worth knowing, because it misled me once: `adb shell am start` is
+        // NOT equivalent. The system answers that with "Activity not
+        // started, its current task has been brought to the front" and
+        // delivers no intent, so testing this over ADB shows a dead button
+        // that works perfectly in the hand.
+        callPage("window.__ambientRelaunch&&window.__ambientRelaunch()");
+    }
+
+    /** Run a snippet in the page from any thread. */
+    private void callPage(final String js) {
         final WebView w = web;
         if (w == null) return;
         w.post(new Runnable() {
             public void run() {
-                try {
-                    w.evaluateJavascript(
-                        "window.__ambientRelaunch&&window.__ambientRelaunch()",
-                        null);
-                } catch (Throwable ignored) {}
+                try { w.evaluateJavascript(js, null); }
+                catch (Throwable ignored) {}
             }
         });
     }
@@ -1083,6 +1096,19 @@ public class MainActivity extends Activity {
      */
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // The shortcut ("rocket") button reports as KEY_COPY at the input
+        // layer - verified with getevent, alongside a d-pad press as a
+        // control. On THIS device the system consumes it to launch the app,
+        // so it arrives at onNewIntent and never here; this stays as
+        // insurance for a build or a device that dispatches it normally,
+        // and costs nothing when it does not. It could never be caught in
+        // the page: the WebView maps no DOM key event to KEYCODE_COPY, so
+        // JavaScript cannot see it however the page listens.
+        if (keyCode == KeyEvent.KEYCODE_COPY) {
+            if (event.getRepeatCount() == 0) callPage(
+                "window.__ambientRelaunch&&window.__ambientRelaunch()");
+            return true;
+        }
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.getRepeatCount() == 0) {
                 event.startTracking();

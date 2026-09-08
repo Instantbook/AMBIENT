@@ -462,6 +462,28 @@ with arrow keys, or over the companion relay (below), which is deterministic.
 `am force-stop` land on top of whatever they are doing — and their keypresses will look
 like your results.
 
+### The shortcut ("rocket") button IS usable — unlike the assistant one
+
+It emits **`KEY_COPY`** at the input layer (confirmed with `getevent`, with a d-pad press captured
+alongside as a control). The system consumes that to *launch AMBIENT* — so it never arrives as a
+key — but because the activity is `launchMode="singleTask"`, pressing it while AMBIENT is already
+in front delivers **`onNewIntent`**. That makes it a spare hardware button the app can read without
+claiming a keycode, which is exactly what `KEYCODE_ASSIST` could never be.
+
+It drives the **playback lock**: while a video plays it toggles `keyLock` in the page, which
+swallows physical keys (with an on-screen flash, since silence reads as a crash). The phone
+companion still works, holding BACK still exits, and the lock clears itself when playback stops —
+three ways out, none of them the accidental d-pad nudge the lock exists to ignore.
+
+**Two traps, both of which cost time here:**
+
+- **`adb shell am start` is NOT equivalent to the button.** The system answers it with *"Activity
+  not started, its current task has been brought to the front"* and delivers **no intent**, so the
+  feature tests dead over ADB while working perfectly in the hand. Only a real press proves it.
+- **The page can never see this key.** The WebView maps no DOM key event to `KEYCODE_COPY`, so no
+  amount of listening in JavaScript will catch it. `onKeyDown` keeps a `KEYCODE_COPY` branch as
+  insurance for other hardware, but on this device it never fires.
+
 ### The assistant button
 
 The remote's voice button sends `KEY_ASSISTANT` → `KEYCODE_ASSIST`, which **the system intercepts** — it
