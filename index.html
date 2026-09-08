@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v82";
+const APP_VERSION="v83";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2960,26 +2960,44 @@ const cardPodcasts={
         this._search(ctx,q);
       }
     });
-    /* One timer covers both jobs: downloads finishing (a new file appears
-       in MediaStore) and the position of whatever is playing. Both only
-       matter while this card is on stage, so both cost nothing otherwise. */
+    /* The BRIDGE calls are gated to when this card is actually on stage.
+       podcastActive() and listPodcasts() are synchronous JNI hops, and
+       there is nothing to see while another card is loaded - polling them
+       every three seconds forever is the sort of idle cost that only shows
+       up as battery.
+
+       Saving the position is deliberately NOT gated. It has to keep running
+       while you walk away from the card mid-episode, or the place is lost
+       the moment you look at something else - which is exactly how video
+       resume broke earlier. It touches only the audio element, no bridge. */
     setInterval(()=>{
       if(this._owns()&&!ctx.audio.paused())this._savePos(ctx);
+      const st=staged();
+      if(!st||st.id!==this.id||mode==="overview")return;
       let a=[];
       try{if(hostBridge&&hostBridge.podcastActive)
         a=JSON.parse(hostBridge.podcastActive()||"[]")}catch(e){}
       const had=(this._active||[]).length;
       this._active=a;
       if(a.length||had)this._scan();
-      const st=staged();
-      if(st&&st.id===this.id&&(a.length||had||this._owns()))renderCard(this);
+      if(a.length||had||this._owns())renderCard(this);
     },3000);
   },
 
   /* ---- state ---- */
   _scan(){
+    this._scanAt=Date.now();
     try{this._files=JSON.parse(hostBridge.listPodcasts()||"[]")}
     catch(e){this._files=[]}
+  },
+  /* Now that the poll only runs on stage, something has to notice a
+     download that finished while you were elsewhere. render() is the right
+     moment - it is exactly when the list is about to be looked at - but it
+     also runs on every keypress, so this rescans at most once every five
+     seconds. */
+  _maybeScan(){
+    if(Date.now()-(this._scanAt||0)<5000)return;
+    this._scan();
   },
   _all(){return Array.isArray(this._files)?this._files:[]},
   _subs(){
@@ -3229,6 +3247,7 @@ const cardPodcasts={
     if(!hostBridge.listPodcasts)
       return "<div class='state'>This build of the app has no podcast "+
         "bridge yet — reinstall the APK to enable downloading.</div>";
+    this._maybeScan();
     const rows=this._rows();
     const head=this._level==="episodes"&&this._show
       ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
