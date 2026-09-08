@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v84";
+const APP_VERSION="v85";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1041,6 +1041,13 @@ function renderCard(card){
   /* stage body if this card is the one loaded in the main window */
   if(mode!=="overview"&&stagedIs(card)){
     const host=document.getElementById("stage-body");
+    /* Same trap from any other direction: a card repainting on a timer -
+       download progress, a playing track - would yank a focused field out
+       from under the keyboard. Whatever the update was, it is worth less
+       than the sentence someone is halfway through typing. */
+    const act=document.activeElement;
+    if(act&&host&&host.contains(act)&&
+       (act.tagName==="INPUT"||act.tagName==="TEXTAREA"))return;
     try{
       const out=card.render(ctxFor(card),card._data||{});
       if(typeof out==="string")host.innerHTML=out;
@@ -1126,7 +1133,17 @@ addEventListener("offline",()=>setOnline(false));
    changes — TV browsers resize when their chrome shows/hides */
 let _rz=null;
 addEventListener("resize",()=>{clearTimeout(_rz);
-  _rz=setTimeout(()=>render(),120)});
+  _rz=setTimeout(()=>{
+    /* NOT while typing. The on-screen keyboard resizes the viewport when it
+       opens, and re-rendering then replaces the very input it opened for -
+       the field is destroyed, focus goes with it, and the keyboard closes
+       again. On screen that reads as the keyboard flashing up and vanishing,
+       with no way to search at all. The viewport resizes back when the
+       keyboard closes, and that resize does the relayout. */
+    const a=document.activeElement;
+    if(a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"))return;
+    render();
+  },120)});
 
 /* ---------------- input router ----------------
    bezel:    arrows move to the nearest tile · OK open
