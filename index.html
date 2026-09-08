@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v81";
+const APP_VERSION="v82";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3006,6 +3006,17 @@ const cardPodcasts={
     if(!s)s="episode";
     return /\.mp3$/i.test(s)?s:s+".mp3";
   },
+  /* MediaStore takes ALBUM from the containing folder, so every download
+     comes back filed under "AMBIENT" rather than the show it belongs to.
+     The filename is the reliable record - we wrote it as "Show - Title" -
+     so read the pair back out of that instead. */
+  _split(f){
+    const base=String(f.file||"").replace(/\.mp3$/i,"");
+    const i=base.indexOf(" - ");
+    if(i>0)return{show:base.slice(0,i),title:base.slice(i+3)};
+    return{show:(f.show&&f.show!=="AMBIENT")?f.show:"",
+      title:f.name||base||"episode"};
+  },
   _downloadedFile(show,title){
     const want=this._fileFor(show,title);
     return this._all().filter(f=>f.file===want)[0]||null;
@@ -3112,8 +3123,9 @@ const cardPodcasts={
   },
   _play(ctx,f){
     const at=this._positions(ctx)[f.id]||0;
-    ctx.audio.play({label:f.name||f.file,url:this._base()+"?id="+f.id,
-      cors:true,region:f.show||"",podcast:true,mediaId:f.id,at});
+    const w=this._split(f);
+    ctx.audio.play({label:w.title,url:this._base()+"?id="+f.id,
+      cors:true,region:w.show,podcast:true,mediaId:f.id,at});
     this._note=at?"resumed "+this._hms(at):"";
     render();
   },
@@ -3132,9 +3144,12 @@ const cardPodcasts={
             (e.bytes?" · "+Math.round(e.bytes/1048576)+" MB":"")};
       });
     if(this._level==="downloads")
-      return this._all().map(f=>({label:f.name||f.file,file:f,down:true,
-        meta:(f.show?f.show+" · ":"")+this._hms((f.dur||0)/1000)+
-          " · "+Math.round((f.bytes||0)/1048576)+" MB"}));
+      return this._all().map(f=>{
+        const w=this._split(f);
+        return {label:w.title,file:f,down:true,
+          meta:(w.show?w.show+" · ":"")+this._hms((f.dur||0)/1000)+
+            " · "+Math.round((f.bytes||0)/1048576)+" MB"};
+      });
     /* home */
     const rows=[];
     const n=this._all().length;
