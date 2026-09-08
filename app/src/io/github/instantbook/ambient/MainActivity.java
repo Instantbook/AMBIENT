@@ -994,6 +994,34 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * The shortcut ("rocket") button launches AMBIENT. When AMBIENT is
+     * ALREADY in front, singleTask means the system delivers the launch
+     * here instead of starting anything - so the button becomes a spare
+     * input the app can use, without claiming a keycode the system
+     * intercepts (which is what makes the assistant button unusable).
+     *
+     * The page turns it into a playback lock. A hardware button is the
+     * right unlock precisely because it cannot be pressed by the same
+     * accidental brush of the d-pad that the lock exists to ignore.
+     */
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        final WebView w = web;
+        if (w == null) return;
+        w.post(new Runnable() {
+            public void run() {
+                try {
+                    w.evaluateJavascript(
+                        "window.__ambientRelaunch&&window.__ambientRelaunch()",
+                        null);
+                } catch (Throwable ignored) {}
+            }
+        });
+    }
+
     @Override
     protected void onPause() {
         super.onPause();

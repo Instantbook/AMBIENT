@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v78";
+const APP_VERSION="v79";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1120,6 +1120,40 @@ addEventListener("resize",()=>{clearTimeout(_rz);
              (OK again on the open tile = fullscreen) · BACK overview
    main/full: ▲▼/OK act inside the card · ◄► move on · BACK bezel
    overview:  arrows select · OK open · BACK bezel            */
+/* ---------------- key lock ----------------
+   A film is watched with the remote in your hand and the d-pad is exactly
+   where a thumb rests, so a nudge stops playback. The shortcut button that
+   launches AMBIENT arrives here as a RELAUNCH when the app is already in
+   front (singleTask, so the system delivers onNewIntent rather than
+   starting anything), which makes it a spare hardware button - and a
+   hardware button is the right unlock, because it cannot be pressed by the
+   same accident that made you want the lock in the first place.
+
+   Only physical keys are blocked. The phone companion still works, which
+   is a second way out, and holding BACK still exits the app because that
+   is handled in Java below the page entirely. */
+let keyLock=false;
+function vidFlash(msg,ms){
+  const osd=document.getElementById("vid-osd");
+  if(!osd)return false;
+  osd.textContent=msg;
+  osd.style.opacity="1";
+  clearTimeout(vidFlash._t);
+  vidFlash._t=setTimeout(()=>{try{osd.style.opacity="0"}catch(e){}},ms||2000);
+  return true;
+}
+function setLock(v){
+  keyLock=!!v;
+  vidFlash(keyLock?"LOCKED · shortcut button unlocks":"UNLOCKED");
+}
+window.__ambientRelaunch=function(){
+  /* Only while a film is playing. A lock with nothing to protect is
+     indistinguishable from an app that has stopped responding, so outside
+     playback the button does what it always did - nothing - except that it
+     will always release a lock that somehow outlived its video. */
+  if(cardVideo&&cardVideo._playing)setLock(!keyLock);
+  else if(keyLock)setLock(false);
+};
 addEventListener("keydown",e=>{
   if(e.target&&e.target.tagName==="INPUT"){
     if(e.key==="Escape"||e.key==="GoBack"){e.target.blur();e.preventDefault()}
@@ -1130,6 +1164,9 @@ addEventListener("keydown",e=>{
     GoBack:"back",BrowserBack:"back"};
   const k=map[e.key];if(!k)return;
   e.preventDefault();
+  /* Swallowed, but not silently: nothing happening with no explanation is
+     how a lock reads as a crash. */
+  if(keyLock){vidFlash("LOCKED · shortcut button unlocks");return}
   /* Android sends auto-repeat keydowns while a key is held, so e.repeat is
      all "press and hold" needs - no timers, and it stops the instant the
      key is released. */
@@ -3197,6 +3234,9 @@ const cardVideo={
        to it later - which is the main thing resume is for. */
     this._node=null;this._nodeId=null;this._resumedFor=null;
     this._playing=null;
+    /* The lock exists to protect playback; with playback gone it would
+       just be a dead remote with no film on screen to explain why. */
+    keyLock=false;
   },
   /* Climb, skipping on the way up exactly the levels skipped coming down */
   _up(ctx){
