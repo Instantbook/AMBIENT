@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v83";
+const APP_VERSION="v84";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -297,6 +297,8 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.radio.favs","ambient.card.video.pos",
   "ambient.card.video.recent",
   "ambient.card.podcasts.subs","ambient.card.podcasts.pos",
+  "ambient.card.podcasts.seen","ambient.card.podcasts.got",
+  "ambient.card.podcasts.auto","ambient.card.podcasts.keep",
   "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
@@ -2982,6 +2984,13 @@ const cardPodcasts={
       if(a.length||had)this._scan();
       if(a.length||had||this._owns())renderCard(this);
     },3000);
+    /* Half an hour, and NOT gated to being on stage - the whole point of a
+       badge is that it is right before you look. This is a network fetch
+       per subscription on a slow timer, a different cost class entirely
+       from the three-second JNI poll above. The first run is delayed so it
+       does not compete with the shell's own startup fetches. */
+    setTimeout(()=>this._poll(ctx),20000);
+    setInterval(()=>this._poll(ctx),30*60*1000);
   },
 
   /* ---- state ---- */
@@ -3051,6 +3060,104 @@ const cardPodcasts={
     return e.dur.replace(/^00:/,"");
   },
 
+  /* ---- following ----
+     Subscribing was only half of "follow": nothing looked at a feed unless
+     you opened it. This checks them on a slow timer and puts a count on the
+     tile, which is the ambient-appropriate signal - on a display you WEAR,
+     an interruption is expensive and a glance is free, so a number on the
+     bezel beats a notification over whatever you are watching. */
+  _cfg(ctx){
+    return {auto:ctx.storage.get("auto",true)!==false,
+            keep:+ctx.storage.get("keep",3)||3};
+  },
+  _seenMap(ctx){
+    const m=ctx.storage.get("seen",{});
+    return (m&&typeof m==="object")?m:{};
+  },
+  /* Opening a show is what marks it read - the badge should survive a
+     restart and clear only when you have actually looked. */
+  _markSeen(ctx,sub,eps){
+    const m=this._seenMap(ctx);
+    const newest=(eps||[]).reduce((x,e)=>Math.max(x,e.ts||0),0);
+    if(newest){m[sub.feed]=newest;ctx.storage.set("seen",m)}
+    if(this._newCounts)delete this._newCounts[sub.feed];
+  },
+  _newTotal(){
+    const c=this._newCounts||{};
+    return Object.keys(c).reduce((a,k)=>a+(c[k]||0),0);
+  },
+  async _poll(ctx){
+    if(this._polling||!online)return;
+    const base=WORKER_BASE(),subs=this._subs();
+    if(!base||!subs.length)return;
+    this._polling=true;
+    const seen=this._seenMap(ctx),cfg=this._cfg(ctx),counts={};
+    for(const sub of subs){
+      let d=null;
+      try{
+        const r=await fetch(base+"/podcast?feed="+encodeURIComponent(sub.feed),
+          {signal:AbortSignal.timeout(25000)});
+        d=await r.json();
+      }catch(e){continue}
+      if(!d||!Array.isArray(d.episodes)||!d.episodes.length)continue;
+      /* newest first regardless of how the publisher ordered the file */
+      const eps=d.episodes.slice().sort((a,b)=>(b.ts||0)-(a.ts||0));
+      const since=seen[sub.feed]||0;
+      const n=eps.filter(e=>(e.ts||0)>since).length;
+      if(n)counts[sub.feed]=n;
+      /* A brand new subscription has no "since", so everything would count
+         as new and the newest would download unasked. Record where it
+         stands instead, and let the NEXT episode be the first new one. */
+      if(!since){
+        const m=this._seenMap(ctx);
+        m[sub.feed]=eps[0].ts||Date.now();
+        ctx.storage.set("seen",m);
+        delete counts[sub.feed];
+        continue;
+      }
+      if(cfg.auto)this._autoGet(ctx,sub,eps[0]);
+    }
+    this._newCounts=counts;
+    this._polling=false;
+    if(cfg.auto)this._prune(ctx);
+    this._scan();
+    try{renderCard(this)}catch(e){}
+  },
+  _autoGet(ctx,sub,ep){
+    if(!ep||!ep.url)return;
+    const name=this._fileFor(sub.title,ep.title);
+    const got=ctx.storage.get("got",{})||{};
+    /* Fetched once already. If it is not on the device now, you deleted it
+       - re-downloading what someone just threw away is the single most
+       annoying thing an auto-downloader can do. */
+    if(got[name])return;
+    if(this._downloadedFile(sub.title,ep.title))return;
+    try{hostBridge.podcastDownload(ep.url,name)}catch(e){return}
+    got[name]=Date.now();
+    ctx.storage.set("got",got);
+  },
+  /* Retention only ever touches what auto-download fetched. An episode you
+     chose yourself is yours; the app tidying that away is the kind of
+     helpfulness nobody forgives twice. */
+  _prune(ctx){
+    const cfg=this._cfg(ctx),got=ctx.storage.get("got",{})||{};
+    const byShow={};
+    this._all().forEach(f=>{
+      if(!got[f.file])return;
+      const sh=this._split(f).show||"";
+      (byShow[sh]=byShow[sh]||[]).push(f);
+    });
+    let changed=false;
+    Object.keys(byShow).forEach(sh=>{
+      byShow[sh].sort((a,b)=>(got[b.file]||0)-(got[a.file]||0))
+        .slice(cfg.keep).forEach(f=>{
+          try{hostBridge.podcastDelete(f.id)}catch(e){}
+          delete got[f.file];changed=true;
+        });
+    });
+    if(changed)ctx.storage.set("got",got);
+  },
+
   /* ---- resume, per episode ---- */
   _positions(ctx){
     const p=ctx.storage.get("pos",{});
@@ -3102,6 +3209,7 @@ const cardPodcasts={
       .then(d=>{
         if(d.error){this._note=d.error;return}
         this._eps=d.episodes||[];
+        this._markSeen(ctx,sub,this._eps);
         if(!this._eps.length)this._note="no episodes in this feed";
       })
       .catch(e=>{this._note="feed failed: "+String(e.message||e).slice(0,40)})
@@ -3173,7 +3281,12 @@ const cardPodcasts={
     const n=this._all().length;
     if(n)rows.push({label:"DOWNLOADED",go:"downloads",
       meta:n+" episode"+(n===1?"":"s")});
-    this._subs().forEach(s=>rows.push({label:s.title,sub:s,meta:"subscribed"}));
+    const counts=this._newCounts||{};
+    this._subs().forEach(s=>rows.push({label:s.title,sub:s,
+      meta:counts[s.feed]?counts[s.feed]+" new":"subscribed"}));
+    const cfg=this._ctx?this._cfg(this._ctx):{auto:true,keep:3};
+    rows.push({label:"AUTO-DOWNLOAD",cfg:true,
+      meta:(cfg.auto?"on":"off")+" · keep "+cfg.keep+" per show"});
     return rows;
   },
 
@@ -3184,6 +3297,12 @@ const cardPodcasts={
       if(r.sub)this._unsubscribe(ctx,r.sub.feed);
       else this._delete(ctx,r.file);
       return;
+    }
+    if(r.cfg){
+      const cfg=this._cfg(ctx);
+      ctx.storage.set("auto",!cfg.auto);
+      this._note=!cfg.auto?"auto-download on":"auto-download off";
+      ctx.rerender();return;
     }
     if(r.go){this._level=r.go;this.sel=0;this._arm=-1;this._note="";
       ctx.rerender();return}
@@ -3206,6 +3325,11 @@ const cardPodcasts={
     if(k==="up"&&this.sel>0){this.sel--;this._arm=-1;ctx.rerender();return true}
     if(k==="enter"){this._enter(ctx);return true}
     const r=rows[this.sel];
+    if(k==="right"&&r&&r.cfg){
+      const cfg=this._cfg(ctx),steps=[1,3,5,10];
+      ctx.storage.set("keep",steps[(steps.indexOf(cfg.keep)+1)%steps.length]);
+      ctx.rerender();return true;
+    }
     if(k==="right"&&r){
       /* Destructive actions arm first and are confirmed with OK, the same
          two presses LAUNCH uses to remove a link. Downloading is not
@@ -3333,6 +3457,9 @@ const cardPodcasts={
       {sub:act>1?act+" queued":""});
     const n=this._all().length,s=this._subs().length;
     if(!n&&!s)return face("—","no shows yet");
+    const fresh=this._newTotal();
+    if(fresh)return face(fresh,"new",
+      {color:"var(--accent)",sub:n+" downloaded"});
     return face(n,"downloaded",
       {sub:s+" show"+(s===1?"":"s")+" subscribed"});
   }
