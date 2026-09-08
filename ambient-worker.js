@@ -112,6 +112,65 @@ export default {
       }
     }
 
+    /* ---- podcast: one show's episodes ----
+       Podcast feeds are not CORS-clean (checked: 200 with no
+       Access-Control-Allow-Origin on both libsyn and feedburner), so the
+       page cannot read them itself. Discovery does not need us - the iTunes
+       search API sends Access-Control-Allow-Origin: * and needs no key - so
+       only this half comes through the Worker. */
+    if (url.pathname === "/podcast") {
+      /* Taking a URL from the client makes this a fetch proxy, so close the
+         obvious abuse: https only, and nothing pointed back inside a
+         private network. */
+      let target;
+      try { target = new URL(url.searchParams.get("feed") || ""); }
+      catch (e) { return json({ error: "bad feed url" }, 400, env); }
+      if (target.protocol !== "https:")
+        return json({ error: "https only" }, 400, env);
+      if (/^(localhost|\[?::1\]?|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/i
+            .test(target.hostname))
+        return json({ error: "refused" }, 400, env);
+      try {
+        const r = await fetch(target.toString(), {
+          cf: { cacheTtl: 900 },
+          headers: { "User-Agent": UA,
+                     "Accept": "application/rss+xml, application/xml, text/xml" },
+        });
+        if (!r.ok) return json({ error: "feed " + r.status }, 502, env);
+        const xml = (await r.text()).slice(0, 4000000);
+        let show = decode((xml.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || "");
+        if (show.length > 60) show = show.slice(0, 60).trim();
+        const art = (xml.match(/<itunes:image[^>]*href="([^"]+)"/i) || [])[1] || "";
+        const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>/g) || [];
+        const episodes = [];
+        for (const b of blocks) {
+          /* 300 is generous for a browsable list and keeps a fifteen-year
+             archive from arriving as a several-megabyte payload. */
+          if (episodes.length >= 300) break;
+          /* An item with no enclosure is not an episode - shows post
+             text-only announcements into the same feed. */
+          const enc = /<enclosure[^>]*>/i.exec(b);
+          if (!enc) continue;
+          const audio = (/url="([^"]+)"/i.exec(enc[0]) || [])[1] || "";
+          if (!audio) continue;
+          const when = pick(b, "pubDate") || pick(b, "published") ||
+                       pick(b, "dc:date") || "";
+          const ts = when ? Date.parse(decode(when)) : NaN;
+          episodes.push({
+            title: decode(pick(b, "title")) || "episode",
+            url: audio,
+            type: (/type="([^"]+)"/i.exec(enc[0]) || [])[1] || "audio/mpeg",
+            bytes: +((/length="(\d+)"/i.exec(enc[0]) || [])[1] || 0),
+            dur: decode(pick(b, "itunes:duration") || "").trim(),
+            ts: isFinite(ts) ? ts : null,
+          });
+        }
+        return json({ show, art, episodes }, 200, env);
+      } catch (e) {
+        return json({ error: "fetch failed" }, 502, env);
+      }
+    }
+
     /* ---- feeds: fetch + crude-parse RSS titles server-side ---- */
     if (url.pathname === "/feeds") {
       const feeds = (env.FEEDS || "").split(",")
@@ -128,9 +187,7 @@ export default {
           const r = await fetch(f, {
             cf: { cacheTtl: 300 },
             headers: {
-              "User-Agent":
-                "Mozilla/5.0 (compatible; AMBIENT/1.0; " +
-                "+https://instantbook.github.io/AMBIENT/)",
+              "User-Agent": UA,
               "Accept": "application/rss+xml, application/xml, text/xml",
             },
           });

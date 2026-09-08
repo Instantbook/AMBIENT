@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v79";
+const APP_VERSION="v80";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -296,6 +296,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.launch.links","ambient.card.vis.style",
   "ambient.card.radio.favs","ambient.card.video.pos",
   "ambient.card.video.recent",
+  "ambient.card.podcasts.subs","ambient.card.podcasts.pos",
   "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
@@ -416,6 +417,16 @@ const audioBus=(()=>{
         failedUrl=null;
         el.src=item.url;
         current=item;
+        /* item.at resumes mid-file. Setting currentTime before the metadata
+           arrives is ignored - a new src has readyState 0 - so it waits for
+           the event, and checks readyState too in case it has already
+           passed, which is the same race that made video resume silently
+           skip. */
+        if(item.at>0){
+          const go=()=>{try{el.currentTime=item.at}catch(e){}};
+          el.addEventListener("loadedmetadata",go,{once:true});
+          if(el.readyState>=1)go();
+        }
         const p=el.play();
         if(p&&p.catch)p.catch(()=>fail(item));
         emit("audio",{state:"play",item});
@@ -2922,6 +2933,370 @@ const cardMusic={
    device's own player rather than pretended at. */
 const VIDEO_OK=/^video\/(mp4|webm|ogg|x-m4v|quicktime)$/i;
 
+/* ---- podcasts ----
+   Discovery is DIRECT: the iTunes search API sends
+   Access-Control-Allow-Origin: * and needs no key, so the page can ask it
+   itself. Episode lists are not - podcast feeds answer 200 with no CORS
+   header at all (checked on libsyn and feedburner) - so those come through
+   the Worker, which already had an RSS parser to extend.
+
+   Downloads land in the public Podcasts folder, and that placement is what
+   keeps a back-catalogue out of the music library: MediaStore classifies by
+   path, and listMedia() already filters IS_MUSIC != 0. */
+const cardPodcasts={
+  id:"podcasts",title:"PODCASTS",icon:"mic",prefersFull:true,
+  pane:"listen",size:"large",order:54,refresh:null,offline:"local-first",
+  /* the phone can send a search, which beats typing on a TV keyboard */
+  accepts:["text"],
+  sel:0,_level:"home",_show:null,_eps:null,_results:null,
+  _busy:false,_note:"",_files:null,_active:null,_ctx:null,_arm:-1,
+
+  init(ctx){
+    this._ctx=ctx;
+    this._scan();
+    document.addEventListener("change",e=>{
+      if(e.target&&e.target.id==="pod-in"&&e.target.value.trim()){
+        const q=e.target.value.trim();e.target.value="";
+        this._search(ctx,q);
+      }
+    });
+    /* One timer covers both jobs: downloads finishing (a new file appears
+       in MediaStore) and the position of whatever is playing. Both only
+       matter while this card is on stage, so both cost nothing otherwise. */
+    setInterval(()=>{
+      if(this._owns()&&!ctx.audio.paused())this._savePos(ctx);
+      let a=[];
+      try{if(hostBridge&&hostBridge.podcastActive)
+        a=JSON.parse(hostBridge.podcastActive()||"[]")}catch(e){}
+      const had=(this._active||[]).length;
+      this._active=a;
+      if(a.length||had)this._scan();
+      const st=staged();
+      if(st&&st.id===this.id&&(a.length||had||this._owns()))renderCard(this);
+    },3000);
+  },
+
+  /* ---- state ---- */
+  _scan(){
+    try{this._files=JSON.parse(hostBridge.listPodcasts()||"[]")}
+    catch(e){this._files=[]}
+  },
+  _all(){return Array.isArray(this._files)?this._files:[]},
+  _subs(){
+    const s=this._ctx?this._ctx.storage.get("subs",[]):[];
+    return Array.isArray(s)?s:[];
+  },
+  _base(){
+    if(this._baseUrl==null){
+      try{this._baseUrl=hostBridge.mediaBase()}catch(e){this._baseUrl=""}
+    }
+    return this._baseUrl;
+  },
+  _owns(){
+    const cur=audioBus.current(),b=this._base();
+    return !!(cur&&cur.url&&b&&cur.url.indexOf(b+"?id=")===0&&cur.podcast);
+  },
+  /* The filename asked of DownloadManager, and the key a downloaded file is
+     matched back by. Java sanitises identically, so both sides agree - the
+     ID3 title cannot be used for this, being whatever the publisher wrote. */
+  _fileFor(show,title){
+    let s=((show?show+" - ":"")+String(title||""))
+      .replace(/[^A-Za-z0-9 ._-]/g,"_").trim();
+    if(s.length>80)s=s.slice(0,80);
+    if(!s)s="episode";
+    return /\.mp3$/i.test(s)?s:s+".mp3";
+  },
+  _downloadedFile(show,title){
+    const want=this._fileFor(show,title);
+    return this._all().filter(f=>f.file===want)[0]||null;
+  },
+  _hms(sec){
+    sec=Math.max(0,Math.round(sec||0));
+    const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
+    return (h?h+":"+String(m).padStart(2,"0"):String(m))+
+      ":"+String(s).padStart(2,"0");
+  },
+  _epDur(e){
+    if(!e.dur)return "";
+    if(/^\d+$/.test(e.dur))return this._hms(+e.dur);
+    return e.dur.replace(/^00:/,"");
+  },
+
+  /* ---- resume, per episode ---- */
+  _positions(ctx){
+    const p=ctx.storage.get("pos",{});
+    return (p&&typeof p==="object")?p:{};
+  },
+  _savePos(ctx){
+    const cur=audioBus.current();
+    if(!cur||!cur.mediaId)return;
+    const t=audioBus.position(),d=audioBus.duration();
+    if(!d||t<30)return;
+    const p=this._positions(ctx);
+    /* finished is not a position worth keeping - it would resume you into
+       the last ten seconds of a two-hour episode forever */
+    if(t/d>0.98)delete p[cur.mediaId]; else p[cur.mediaId]=Math.round(t);
+    const keys=Object.keys(p);
+    if(keys.length>200)keys.slice(0,keys.length-200).forEach(k=>delete p[k]);
+    ctx.storage.set("pos",p);
+  },
+
+  /* ---- network ---- */
+  _search(ctx,q){
+    this._busy=true;this._note="";this._level="search";this.sel=0;
+    this._results=null;ctx.rerender();
+    const u="https://itunes.apple.com/search?media=podcast&limit=25&term="+
+      encodeURIComponent(q);
+    fetch(u,{signal:AbortSignal.timeout(15000)})
+      .then(r=>r.json())
+      .then(d=>{
+        this._results=(d.results||[])
+          .filter(r=>r.feedUrl)
+          .map(r=>({title:String(r.collectionName||"podcast").slice(0,70),
+            feed:r.feedUrl,art:r.artworkUrl100||"",
+            count:r.trackCount||0,
+            artist:String(r.artistName||"").slice(0,40)}));
+        if(!this._results.length)this._note="nothing found for “"+q+"”";
+      })
+      .catch(e=>{this._note="search failed: "+String(e.message||e).slice(0,40)})
+      .then(()=>{this._busy=false;try{ctx.rerender()}catch(e){}});
+  },
+  _open(ctx,sub){
+    this._show=sub;this._level="episodes";this.sel=0;this._eps=null;
+    this._busy=true;this._note="";ctx.rerender();
+    const base=WORKER_BASE();
+    if(!base){this._busy=false;this._note="needs the Worker URL";
+      ctx.rerender();return}
+    fetch(base+"/podcast?feed="+encodeURIComponent(sub.feed),
+      {signal:AbortSignal.timeout(25000)})
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.error){this._note=d.error;return}
+        this._eps=d.episodes||[];
+        if(!this._eps.length)this._note="no episodes in this feed";
+      })
+      .catch(e=>{this._note="feed failed: "+String(e.message||e).slice(0,40)})
+      .then(()=>{this._busy=false;try{ctx.rerender()}catch(e){}});
+  },
+
+  /* ---- actions ---- */
+  _subscribe(ctx,r){
+    const subs=this._subs();
+    if(!subs.some(s=>s.feed===r.feed)){
+      subs.push({title:r.title,feed:r.feed,art:r.art});
+      ctx.storage.set("subs",subs);
+    }
+  },
+  _unsubscribe(ctx,feed){
+    const subs=this._subs().filter(s=>s.feed!==feed);
+    ctx.storage.set("subs",subs);
+    this._arm=-1;this._note="unsubscribed";
+    if(this.sel>=subs.length)this.sel=Math.max(0,subs.length);
+    ctx.rerender();
+  },
+  _download(ctx,ep){
+    const show=this._show?this._show.title:"";
+    let id="";
+    try{id=hostBridge.podcastDownload(ep.url,this._fileFor(show,ep.title))}
+    catch(e){}
+    this._note=id?"downloading …":"could not start the download";
+    ctx.rerender();
+  },
+  _delete(ctx,f){
+    let ok=false;
+    try{ok=hostBridge.podcastDelete(f.id)}catch(e){}
+    this._arm=-1;
+    this._note=ok?"deleted":"could not delete";
+    this._scan();
+    ctx.rerender();
+  },
+  _play(ctx,f){
+    const at=this._positions(ctx)[f.id]||0;
+    ctx.audio.play({label:f.name||f.file,url:this._base()+"?id="+f.id,
+      cors:true,region:f.show||"",podcast:true,mediaId:f.id,at});
+    this._note=at?"resumed "+this._hms(at):"";
+    render();
+  },
+
+  /* ---- rows ---- */
+  _rows(){
+    if(this._level==="search")
+      return (this._results||[]).map(r=>({label:r.title,
+        meta:(r.count?r.count+" eps":"")+(r.artist?" · "+r.artist:""),
+        result:r}));
+    if(this._level==="episodes")
+      return (this._eps||[]).map(e=>{
+        const f=this._downloadedFile(this._show?this._show.title:"",e.title);
+        return {label:e.title,ep:e,file:f,
+          meta:(f?"● on device · ":"")+this._epDur(e)+
+            (e.bytes?" · "+Math.round(e.bytes/1048576)+" MB":"")};
+      });
+    if(this._level==="downloads")
+      return this._all().map(f=>({label:f.name||f.file,file:f,down:true,
+        meta:(f.show?f.show+" · ":"")+this._hms((f.dur||0)/1000)+
+          " · "+Math.round((f.bytes||0)/1048576)+" MB"}));
+    /* home */
+    const rows=[];
+    const n=this._all().length;
+    if(n)rows.push({label:"DOWNLOADED",go:"downloads",
+      meta:n+" episode"+(n===1?"":"s")});
+    this._subs().forEach(s=>rows.push({label:s.title,sub:s,meta:"subscribed"}));
+    return rows;
+  },
+
+  _enter(ctx){
+    const r=this._rows()[this.sel];
+    if(!r)return;
+    if(this._arm===this.sel&&(r.sub||r.down)){
+      if(r.sub)this._unsubscribe(ctx,r.sub.feed);
+      else this._delete(ctx,r.file);
+      return;
+    }
+    if(r.go){this._level=r.go;this.sel=0;this._arm=-1;this._note="";
+      ctx.rerender();return}
+    if(r.result){this._subscribe(ctx,r.result);this._open(ctx,r.result);return}
+    if(r.sub){this._open(ctx,r.sub);return}
+    if(r.down){this._play(ctx,r.file);return}
+    if(r.ep){
+      /* OK plays what is already here and fetches what is not - the two
+         things you would ever want from an episode row, without asking
+         which one this is. */
+      if(r.file)this._play(ctx,r.file); else this._download(ctx,r.ep);
+      return;
+    }
+  },
+
+  onKey(ctx,k,held){
+    const rows=this._rows();
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;this._arm=-1;
+      ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._arm=-1;ctx.rerender();return true}
+    if(k==="enter"){this._enter(ctx);return true}
+    const r=rows[this.sel];
+    if(k==="right"&&r){
+      /* Destructive actions arm first and are confirmed with OK, the same
+         two presses LAUNCH uses to remove a link. Downloading is not
+         destructive, so it just happens. */
+      if(r.sub||r.down){this._arm=this._arm===this.sel?-1:this.sel;
+        ctx.rerender();return true}
+      if(r.ep&&r.file){this._arm=this._arm===this.sel?-1:this.sel;
+        ctx.rerender();return true}
+      if(r.ep){this._download(ctx,r.ep);return true}
+    }
+    if(k==="left"&&this._arm>=0){this._arm=-1;ctx.rerender();return true}
+    if((k==="left"||k==="right")&&mode==="full"&&rows.length>pageRows()){
+      const step=pageRows()*(held?2:1);
+      this.sel=Math.max(0,Math.min(rows.length-1,
+        this.sel+(k==="left"?-step:step)));
+      this._arm=-1;ctx.rerender();return true;
+    }
+    return false;
+  },
+  onBack(ctx){
+    if(this._arm>=0){this._arm=-1;ctx.rerender();return true}
+    if(this._level==="episodes"||this._level==="search"||
+       this._level==="downloads"){
+      this._level="home";this.sel=0;this._note="";ctx.rerender();return true;
+    }
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._enter(ctx)},
+  /* a search typed on the phone, which is the civilised way to do this */
+  onText(ctx,v){if(v&&String(v).trim())this._search(ctx,String(v).trim())},
+
+  render(ctx){
+    if(!hostBridge||!hostBridge.listPodcasts)
+      return "<div class='state'>Podcasts need the AMBIENT app — a web "+
+        "page cannot download or index audio on the device.</div>";
+    const rows=this._rows();
+    const head=this._level==="episodes"&&this._show
+      ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>"+esc(this._show.title)+"</div><div class='lbl'>"+
+       ((this._eps||[]).length+" episodes")+"</div></div>"
+      :this._level==="search"
+      ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>SEARCH RESULTS</div><div class='lbl'>OK subscribes "+
+       "and opens</div></div>"
+      :this._level==="downloads"
+      ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>ON THIS DEVICE</div><div class='lbl'>"+
+       rows.length+" episodes</div></div>"
+      :"";
+    const w=rowWindow(this,rows,this.sel);
+    const list=w.items.map((r,j)=>{
+      const i=w.start+j;
+      const on=(i===this.sel),armed=(i===this._arm);
+      const cur=audioBus.current();
+      const playing=r.file&&cur&&cur.mediaId===r.file.id;
+      return "<div class='row"+(on?" hl sel":"")+"' data-row='"+i+"'>"+
+        "<span class='"+(on?"":"lbl")+"'>"+
+        (playing?"<span style='color:var(--up)'>▶ </span>":"")+
+        esc(r.label)+"</span>"+
+        "<span class='lbl' style='font-size:12px"+
+        (armed?";color:var(--down)":"")+"'>"+
+        (armed?(r.sub?"unsubscribe?":"delete?"):esc(r.meta||""))+
+        "</span></div>";
+    }).join("");
+    const empty=!rows.length
+      ? "<div class='state'>"+(this._busy?"searching…"
+        :this._level==="home"
+          ?"No subscriptions yet. Type a search below, or send one from the "+
+           "phone companion."
+          :"nothing here")+"</div>"
+      : "";
+    const dl=(this._active||[]).length
+      ? "<div class='lbl' style='margin-top:8px;color:var(--accent)'>"+
+        this._active.map(a=>esc(a.name)+" "+a.pct+"%").join(" · ")+"</div>"
+      : "";
+    const input=(this._level==="home"||this._level==="search")
+      ? "<input type='text' id='pod-in' placeholder='search podcasts' "+
+        "style='margin-top:10px'>"
+      : "";
+    return head+list+empty+dl+
+      (this._note?"<div class='state' style='margin-top:6px;"+
+        "color:var(--warn)'>"+esc(this._note)+"</div>":"")+
+      input+
+      "<div class='state' style='margin-top:8px'>▲▼ choose · OK "+
+      (this._level==="episodes"?"play or download"
+        :this._level==="search"?"subscribe"
+        :this._level==="downloads"?"play":"open")+
+      " · ► "+
+      (this._level==="episodes"?"download, or arm delete"
+        :this._level==="downloads"?"delete"
+        :this._level==="home"?"unsubscribe":"—")+
+      " · BACK "+(this._level==="home"?"to tiles":"up a level")+
+      "</div>";
+  },
+
+  renderFooter(ctx){
+    if(!this._owns())return "";
+    const cur=audioBus.current();
+    const d=audioBus.duration(),p=audioBus.position();
+    if(!d)return "";
+    return "<div class='lbl' style='display:flex;"+
+      "justify-content:space-between'><span>"+esc(cur.label||"")+
+      "</span><span>"+this._hms(p)+" / "+this._hms(d)+"</span></div>"+
+      "<div style='height:4px;background:var(--faint);border-radius:2px;"+
+      "overflow:hidden;margin-top:5px'><div style='height:100%;width:"+
+      (100*p/d).toFixed(1)+"%;background:var(--accent)'></div></div>";
+  },
+
+  renderCompact(ctx){
+    if(!hostBridge||!hostBridge.listPodcasts)return face("—","app only");
+    const cur=audioBus.current();
+    if(cur&&this._owns())
+      return face(audioBus.paused()?"‖":"▶",esc(cur.label),
+        {color:audioBus.paused()?"":"var(--up)",sub:esc(cur.region||"")});
+    const act=(this._active||[]).length;
+    if(act)return face(this._active[0].pct+"%","downloading",
+      {sub:act>1?act+" queued":""});
+    const n=this._all().length,s=this._subs().length;
+    if(!n&&!s)return face("—","no shows yet");
+    return face(n,"downloaded",
+      {sub:s+" show"+(s===1?"":"s")+" subscribed"});
+  }
+};
+
 const cardVideo={
   id:"video",title:"VIDEO",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
@@ -3651,7 +4026,8 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardMusic,cardVideo,cardVis,cardLaunch,cardScenes,cardDisplay,
+  cardRadio,cardMusic,cardPodcasts,cardVideo,cardVis,cardLaunch,cardScenes,
+  cardDisplay,
   cardDevice,cardSystem]);
 /* restore the brightness chosen last time - after loadConfig(), which has
    already seeded localStorage from the durable file */

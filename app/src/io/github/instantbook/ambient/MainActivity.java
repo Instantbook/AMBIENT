@@ -2,6 +2,7 @@ package io.github.instantbook.ambient;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.DownloadManager;
 import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
@@ -180,6 +181,153 @@ public class MainActivity extends Activity {
                 try { if (c != null) c.close(); } catch (Throwable ignored) {}
             }
             return b.append("]").toString();
+        }
+
+        /**
+         * Queue an episode. DownloadManager rather than our own thread: it
+         * survives the app being killed, retries across a dropped
+         * connection and resumes - which matters when one episode is
+         * 60-100MB over house wifi and the box is a TV appliance people
+         * turn off mid-download.
+         *
+         * The destination is load-bearing. Files land in the public
+         * Podcasts directory, so MediaStore classifies them IS_PODCAST=1
+         * and IS_MUSIC=0 by path - which means listMedia()'s existing
+         * "IS_MUSIC != 0" filter keeps them out of the 8000-track music
+         * library for free. Writing them under Music/ would mix a podcast
+         * back-catalogue into the artist list.
+         *
+         * Internal storage, never the microSD: an ordinary app cannot write
+         * a removable volume at all (see listMedia).
+         */
+        @JavascriptInterface
+        public String podcastDownload(String url, String name) {
+            if (!atAmbient) return "";
+            try {
+                String safe = String.valueOf(name)
+                        .replaceAll("[^A-Za-z0-9 ._-]", "_").trim();
+                if (safe.length() > 80) safe = safe.substring(0, 80);
+                if (safe.isEmpty()) safe = "episode";
+                if (!safe.toLowerCase().endsWith(".mp3")) safe += ".mp3";
+                DownloadManager dm = (DownloadManager)
+                        getSystemService(Context.DOWNLOAD_SERVICE);
+                DownloadManager.Request rq =
+                        new DownloadManager.Request(Uri.parse(url));
+                rq.setTitle(safe);
+                rq.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_PODCASTS, "AMBIENT/" + safe);
+                rq.setNotificationVisibility(DownloadManager.Request
+                        .VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                rq.setAllowedOverRoaming(false);
+                return String.valueOf(dm.enqueue(rq));
+            } catch (Throwable t) { return ""; }
+        }
+
+        /** [{name,pct}] for whatever is downloading right now. */
+        @JavascriptInterface
+        public String podcastActive() {
+            if (!atAmbient) return "[]";
+            StringBuilder b = new StringBuilder("[");
+            Cursor c = null;
+            try {
+                DownloadManager dm = (DownloadManager)
+                        getSystemService(Context.DOWNLOAD_SERVICE);
+                DownloadManager.Query q = new DownloadManager.Query();
+                q.setFilterByStatus(DownloadManager.STATUS_RUNNING
+                        | DownloadManager.STATUS_PENDING
+                        | DownloadManager.STATUS_PAUSED);
+                c = dm.query(q);
+                boolean first = true;
+                while (c != null && c.moveToNext()) {
+                    long so = c.getLong(c.getColumnIndexOrThrow(
+                        DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                    long tot = c.getLong(c.getColumnIndexOrThrow(
+                        DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                    String ttl = c.getString(c.getColumnIndexOrThrow(
+                        DownloadManager.COLUMN_TITLE));
+                    if (!first) b.append(",");
+                    first = false;
+                    b.append("{\"name\":\"").append(jesc(ttl == null ? "" : ttl))
+                     .append("\",\"pct\":")
+                     .append(tot > 0 ? (int) (so * 100 / tot) : 0)
+                     .append("}");
+                }
+            } catch (Throwable t) { /* report nothing rather than half */ }
+            finally { try { if (c != null) c.close(); } catch (Throwable ig) {} }
+            return b.append("]").toString();
+        }
+
+        /** [{id,name,show,dur,bytes}] - episodes already on the device. */
+        @JavascriptInterface
+        public String listPodcasts() {
+            if (!atAmbient) return "[]";
+            StringBuilder b = new StringBuilder("[");
+            Cursor c = null;
+            try {
+                c = getContentResolver().query(
+                    MediaStore.Audio.Media.getContentUri("external"),
+                    new String[]{
+                        MediaStore.Audio.Media._ID,
+                        MediaStore.Audio.Media.TITLE,
+                        MediaStore.Audio.Media.ALBUM,
+                        MediaStore.Audio.Media.DURATION,
+                        MediaStore.Audio.Media.SIZE,
+                        // The FILENAME, which we chose - TITLE comes from
+                        // the ID3 tag and is whatever the publisher wrote,
+                        // so it cannot be matched back to a feed entry.
+                        MediaStore.Audio.Media.DISPLAY_NAME},
+                    MediaStore.Audio.Media.IS_PODCAST + "!=0", null,
+                    MediaStore.Audio.Media.DATE_ADDED + " DESC");
+                boolean first = true;
+                while (c != null && c.moveToNext()) {
+                    if (!first) b.append(",");
+                    first = false;
+                    b.append("{\"id\":").append(c.getLong(0))
+                     .append(",\"name\":\"")
+                     .append(jesc(String.valueOf(c.getString(1))))
+                     .append("\",\"show\":\"")
+                     .append(jesc(c.getString(2) == null ? "" : c.getString(2)))
+                     .append("\",\"dur\":").append(c.getLong(3))
+                     .append(",\"bytes\":").append(c.getLong(4))
+                     .append(",\"file\":\"")
+                     .append(jesc(c.getString(5) == null ? "" : c.getString(5)))
+                     .append("\"}");
+                }
+            } catch (Throwable t) { /* permission or provider gone */ }
+            finally { try { if (c != null) c.close(); } catch (Throwable ig) {} }
+            return b.append("]").toString();
+        }
+
+        /**
+         * Delete a downloaded episode. The FILE goes first, by path: the
+         * rows belong to DownloadManager rather than to us, so asking the
+         * resolver to delete one can be refused - but All-files access lets
+         * the file itself go. The index entry is then dropped best-effort,
+         * because a card listing an episode that is no longer there is
+         * worse than one that briefly does not list one that is.
+         */
+        @JavascriptInterface
+        public boolean podcastDelete(long id) {
+            if (!atAmbient) return false;
+            Cursor c = null;
+            try {
+                Uri one = ContentUris.withAppendedId(
+                    MediaStore.Audio.Media.getContentUri("external"), id);
+                String path = null;
+                c = getContentResolver().query(one,
+                    new String[]{MediaStore.Audio.Media.DATA},
+                    null, null, null);
+                if (c != null && c.moveToFirst()) path = c.getString(0);
+                boolean gone = false;
+                if (path != null) {
+                    try { gone = new File(path).delete(); }
+                    catch (Throwable ignored) {}
+                }
+                try { getContentResolver().delete(one, null, null); }
+                catch (Throwable ignored) {}
+                return gone;
+            } catch (Throwable t) { return false; }
+            finally { try { if (c != null) c.close(); } catch (Throwable ig) {} }
         }
 
         @JavascriptInterface
