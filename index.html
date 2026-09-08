@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v80";
+const APP_VERSION="v81";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3205,9 +3205,15 @@ const cardPodcasts={
   onText(ctx,v){if(v&&String(v).trim())this._search(ctx,String(v).trim())},
 
   render(ctx){
-    if(!hostBridge||!hostBridge.listPodcasts)
+    if(!hostBridge)
       return "<div class='state'>Podcasts need the AMBIENT app — a web "+
         "page cannot download or index audio on the device.</div>";
+    /* The bridge is here but this method is not: an older APK. Say which,
+       rather than claiming there is no app at all - the same wrong message
+       the battery card used to give. */
+    if(!hostBridge.listPodcasts)
+      return "<div class='state'>This build of the app has no podcast "+
+        "bridge yet — reinstall the APK to enable downloading.</div>";
     const rows=this._rows();
     const head=this._level==="episodes"&&this._show
       ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
@@ -3282,7 +3288,8 @@ const cardPodcasts={
   },
 
   renderCompact(ctx){
-    if(!hostBridge||!hostBridge.listPodcasts)return face("—","app only");
+    if(!hostBridge)return face("—","app only");
+    if(!hostBridge.listPodcasts)return face("—","update app");
     const cur=audioBus.current();
     if(cur&&this._owns())
       return face(audioBus.paused()?"‖":"▶",esc(cur.label),
