@@ -176,7 +176,9 @@ export default {
         "inventory to what the player actually holds.\n\n" +
         "Let consequences stick. A choice that should end badly may end " +
         "badly. Set ending true only when the story genuinely concludes - " +
-        "aim for somewhere between 12 and 25 turns, not sooner.";
+        "aim for somewhere between 12 and 25 turns, not sooner. Even on " +
+        "a final turn still return three choices; they are not shown " +
+        "once the story has ended, so do not labour over them.";
 
       const prompt = clean
         ? "Continue the adventure.\n\nSTATE (summary covers everything " +
@@ -198,7 +200,17 @@ export default {
         type: "object",
         properties: {
           prose: { type: "string" },
-          choices: { type: "array", items: { type: "string" } },
+          /* minItems:1 is the strongest guarantee available - structured
+             outputs reject any other value ("For 'array' type, 'minItems'
+             values other than 0 or 1 are not supported"), so 3-or-4 cannot
+             be enforced here and stays a prompt preference. One is the
+             constraint that matters anyway: a turn with NO choices is a
+             dead end with nothing to press, which is what Sonnet returned
+             on its first turn. Opus honoured the wording every time, which
+             hid that the schema was enforcing nothing at all. */
+          choices: {
+            type: "array", items: { type: "string" }, minItems: 1,
+          },
           state: {
             type: "object",
             properties: {
@@ -225,18 +237,18 @@ export default {
             "content-type": "application/json",
             "x-api-key": env.ANTHROPIC_API_KEY,
             "anthropic-version": "2023-06-01",
-            /* A policy decline would otherwise just stop the turn dead
-               mid-story; this re-runs it on a fallback inside the same
-               call. */
-            "anthropic-beta": "server-side-fallback-2026-07-01",
           },
           body: JSON.stringify({
-            model: "claude-opus-5",
+            model: "claude-sonnet-5",
             max_tokens: 8000,
-            fallbacks: "default",
-            /* medium, not the default high: a turn of prose is not
-               intelligence-bound, and every second here is a second
-               someone sits watching a blank panel. */
+            /* Sonnet at medium effort. A turn of prose is not
+               intelligence-bound, and on a worn display every second is
+               one spent watching a blank panel - so the cheaper, faster
+               model with room to raise effort later beats the dearer one
+               held at medium. Refusal fallbacks came off with Opus: they
+               are an Opus/Fable feature, and stop_reason is still checked
+               below, so a declined turn reports itself rather than
+               silently returning nothing. */
             output_config: {
               effort: "medium",
               format: { type: "json_schema", schema: SCHEMA },

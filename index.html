@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v88";
+const APP_VERSION="v89";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3606,6 +3606,10 @@ const cardTale={
       if(!this._turn)return [];
       if(this._turn.state&&this._turn.state.ending)
         return [{again:true,label:"START ANOTHER",meta:"this story is over"}];
+      /* Belt and braces behind the schema: a turn with no choices would be
+         a screen with nothing to press and no way on but BACK. */
+      if(!this._turn.choices||!this._turn.choices.length)
+        return [{choice:"Press on",label:"PRESS ON",meta:"the turn offered nothing"}];
       return this._turn.choices.map(c=>({choice:c,label:c,meta:""}));
     }
     const rows=[{fresh:true,label:"NEW ADVENTURE",meta:"choose a setting"}];
