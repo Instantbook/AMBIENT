@@ -135,6 +135,18 @@ export default {
       /* Caps are enforced HERE, not just requested in the prompt: a state
          object is round-tripped through the client, so it is only as
          bounded as the server makes it. */
+      /* The last few exchanges, verbatim. The summary alone is lossy by
+         design - it is rewritten every turn - so without this the model
+         has no fine-grained memory of what just happened and continuity
+         drifts over a long game. Three is enough to keep a scene coherent
+         and still bounded: ~200 tokens whatever the turn number. */
+      const recent = (Array.isArray(body.recent) ? body.recent : [])
+        .slice(-3)
+        .map(x => ({
+          choice: String((x && x.choice) || "").slice(0, 120),
+          prose: String((x && x.prose) || "").slice(0, 300),
+        }));
+
       const clean = st ? {
         title: String(st.title || "").slice(0, 80),
         location: String(st.location || "").slice(0, 80),
@@ -158,16 +170,24 @@ export default {
         "never label them with letters or numbers.\n" +
         "- state: the updated world. summary is a running account of what " +
         "has happened, under 900 characters, rewritten each turn rather " +
-        "than appended to - it is the ONLY memory you will be given next " +
-        "turn, so it must carry anything that matters. Keep inventory to " +
-        "what the player actually holds.\n\n" +
+        "than appended to. You will be given the last three exchanges " +
+        "verbatim next turn, so the summary carries everything OLDER " +
+        "than those - anything it drops is gone for good. Keep " +
+        "inventory to what the player actually holds.\n\n" +
         "Let consequences stick. A choice that should end badly may end " +
         "badly. Set ending true only when the story genuinely concludes - " +
         "aim for somewhere between 12 and 25 turns, not sooner.";
 
       const prompt = clean
-        ? "Continue the adventure.\n\nSTATE:\n" +
+        ? "Continue the adventure.\n\nSTATE (summary covers everything " +
+          "before the recent exchanges below):\n" +
           JSON.stringify(clean, null, 1) +
+          (recent.length
+            ? "\n\nRECENT, oldest first - these are verbatim, and the " +
+              "summary already accounts for everything earlier:\n" +
+              recent.map(x => "> chose: " + x.choice + "\n" + x.prose)
+                .join("\n\n")
+            : "") +
           "\n\nThe player chose: " + (choice || "(nothing - begin the turn)")
         : "Begin a new adventure. Category: " + (cat || "any") +
           ".\n\nOpen in the middle of something already happening - no " +

@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v87";
+const APP_VERSION="v88";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3552,6 +3552,7 @@ const cardTale={
       .then(()=>{this._busy=false;try{ctx.rerender()}catch(_){}});
   },
   _start(ctx,cat){
+    this._recent=[];
     this._post(ctx,{category:cat},d=>{
       this._turn=d;
       this._cur={id:"t"+Date.now(),category:cat};
@@ -3561,8 +3562,14 @@ const cardTale={
   },
   _choose(ctx,text){
     if(!this._turn)return;
-    this._post(ctx,{state:this._turn.state,choice:text},d=>{
-      this._turn=d;this.sel=0;this._save(ctx);
+    /* What just happened, kept verbatim for the next few turns. The
+       summary is rewritten each turn and therefore lossy by design; this
+       is the short-term half of the memory, and it is sliced to three so
+       it can never grow into a transcript. */
+    const prev=(this._recent||[]).concat(
+      [{choice:text,prose:this._turn.prose}]).slice(-3);
+    this._post(ctx,{state:this._turn.state,choice:text,recent:prev},d=>{
+      this._recent=prev;this._turn=d;this.sel=0;this._save(ctx);
     });
   },
   /* Saved after every turn, not on leaving: the card can be walked away
@@ -3574,12 +3581,13 @@ const cardTale={
     list.unshift({id:this._cur.id,category:this._cur.category,
       title:this._turn.state.title||"untitled",
       state:this._turn.state,prose:this._turn.prose,
-      choices:this._turn.choices,at:Date.now()});
+      choices:this._turn.choices,recent:this._recent||[],at:Date.now()});
     this._put(ctx,list);
   },
   _resume(ctx,sv){
     this._cur={id:sv.id,category:sv.category};
     this._turn={prose:sv.prose,choices:sv.choices,state:sv.state};
+    this._recent=Array.isArray(sv.recent)?sv.recent:[];
     this._level="play";this.sel=0;this._note="";ctx.rerender();
   },
   _del(ctx,sv){
