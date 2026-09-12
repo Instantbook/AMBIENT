@@ -705,8 +705,15 @@ public class MainActivity extends Activity {
     private static final String SPATIAL_NAV =
         "(function(){\n" +
         "if(window.__ambientNav)return;window.__ambientNav=1;\n" +
+        // Roles and tabindex catch the well-behaved half of a page. They do
+        // NOT catch a hamburger: that is usually a bare <div> with its
+        // listener bound in JavaScript, carrying no href, no role and no
+        // tabindex. The cursor sweep below is what finds those.
         "var S='a[href],button,input,select,textarea,[onclick],[role=button],'+\n" +
-        "  '[role=link],[tabindex]:not([tabindex=\"-1\"]),video';\n" +
+        "  '[role=link],[role=menuitem],[role=tab],[role=checkbox],'+\n" +
+        "  '[role=switch],[aria-haspopup],summary,'+\n" +
+        "  '[tabindex]:not([tabindex=\"-1\"]),video';\n" +
+        "var DLG='[role=dialog],[role=alertdialog],[aria-modal=\"true\"]';\n" +
         "var st=document.createElement('style');\n" +
         "st.textContent='.__ambsel{outline:3px solid #6cf!important;'+\n" +
         "  'outline-offset:2px!important;scroll-margin:120px!important}';\n" +
@@ -723,13 +730,59 @@ public class MainActivity extends Activity {
         "  return !/^(button|submit|reset|checkbox|radio|image|file)$/i\n" +
         "    .test(e.type||'text');}\n" +
         "function typing(){return edit(document.activeElement);}\n" +
-        "function vis(e){var r=e.getBoundingClientRect();\n" +
-        "  if(r.width<8||r.height<8)return false;\n" +
-        "  if(r.bottom<0||r.top>innerHeight*3)return false;\n" +
-        "  var s=getComputedStyle(e);\n" +
-        "  return s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0';}\n" +
-        "function all(){return [].slice.call(document.querySelectorAll(S))\n" +
-        "  .filter(vis);}\n" +
+        "function shown(e){var s;try{s=getComputedStyle(e)}catch(_){return false}\n" +
+        "  return s.visibility!=='hidden'&&s.display!=='none'&&\n" +
+        "    s.opacity!=='0'&&s.pointerEvents!=='none';}\n" +
+        // Candidates are limited to what is ON SCREEN. That keeps the hit
+        // test below meaningful, and when nothing lies further in a
+        // direction the key falls through and the page scrolls, which
+        // brings the next screenful into range.
+        "function onScreen(r){return r.width>=10&&r.height>=10&&\n" +
+        "  r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;}\n" +
+        // Is this element actually the thing at its own centre? Without
+        // asking, the highlight walks happily onto buttons sitting UNDER a
+        // popup - which is what made an overlay impossible to dismiss. It
+        // also confines navigation to a modal for free, with no need to
+        // recognise that a modal is what this is.
+        "function onTop(e,r){\n" +
+        "  var x=Math.max(1,Math.min(innerWidth-2,r.left+r.width/2));\n" +
+        "  var y=Math.max(1,Math.min(innerHeight-2,r.top+r.height/2));\n" +
+        "  var h=null;try{h=document.elementFromPoint(x,y)}catch(_){}\n" +
+        "  if(!h)return false;\n" +
+        "  return h===e||e.contains(h)||h.contains(e);}\n" +
+        "var cacheAt=0,cacheList=null;\n" +
+        "function all(){\n" +
+        "  var now=Date.now();\n" +
+        "  if(cacheList&&now-cacheAt<400)return cacheList;\n" +
+        "  var found=[],i,e,r,s;\n" +
+        "  function add(el,rect){if(found.indexOf(el)<0&&shown(el)&&\n" +
+        "    onTop(el,rect))found.push(el);}\n" +
+        "  var q=document.querySelectorAll(S);\n" +
+        "  for(i=0;i<q.length;i++){e=q[i];r=e.getBoundingClientRect();\n" +
+        "    if(onScreen(r))add(e,r);}\n" +
+        // cursor:pointer is the one mark a page reliably leaves on
+        // something it expects to be clicked, whatever the markup is.
+        // Capped and viewport-limited so a heavy page cannot make a
+        // keypress expensive.
+        "  var nodes=document.body?document.body.getElementsByTagName('*'):[];\n" +
+        "  for(i=0;i<nodes.length&&found.length<300;i++){\n" +
+        "    e=nodes[i];r=e.getBoundingClientRect();\n" +
+        "    if(!onScreen(r))continue;\n" +
+        "    if(r.width>innerWidth*0.9&&r.height>innerHeight*0.9)continue;\n" +
+        "    try{s=getComputedStyle(e)}catch(_){continue}\n" +
+        "    if(s.cursor!=='pointer')continue;\n" +
+        "    add(e,r);}\n" +
+        // A clickable wrapper around a clickable button is two stops on one
+        // target, and the outer one is the one that does nothing on some
+        // sites. Keep the innermost.
+        "  var drop=[];\n" +
+        "  for(i=0;i<found.length;i++){var p=found[i].parentElement;\n" +
+        "    while(p){if(found.indexOf(p)>=0&&drop.indexOf(p)<0)drop.push(p);\n" +
+        "      p=p.parentElement;}}\n" +
+        "  var out=[];\n" +
+        "  for(i=0;i<found.length;i++)\n" +
+        "    if(drop.indexOf(found[i])<0)out.push(found[i]);\n" +
+        "  cacheList=out.length?out:found;cacheAt=now;return cacheList;}\n" +
         "function box(e){var r=e.getBoundingClientRect();\n" +
         "  return{x:r.left+r.width/2,y:r.top+r.height/2};}\n" +
         // mark() must NOT focus. Focusing an input on Android pops the
@@ -739,8 +792,11 @@ public class MainActivity extends Activity {
         "function mark(e){if(cur)cur.classList.remove('__ambsel');\n" +
         "  cur=e;if(!e)return;e.classList.add('__ambsel');\n" +
         "  try{e.scrollIntoView({block:'center',inline:'nearest'})}catch(_){}}\n" +
+        "function live(e){if(!e||!e.isConnected)return false;\n" +
+        "  var r=e.getBoundingClientRect();\n" +
+        "  return onScreen(r)&&shown(e)&&onTop(e,r);}\n" +
         "function move(dir){var els=all();if(!els.length)return false;\n" +
-        "  if(!cur||els.indexOf(cur)<0||!vis(cur)){mark(els[0]);return true;}\n" +
+        "  if(!cur||els.indexOf(cur)<0||!live(cur)){mark(els[0]);return true;}\n" +
         "  var c=box(cur),best=null,bd=1e9;\n" +
         "  for(var i=0;i<els.length;i++){var e=els[i];if(e===cur)continue;\n" +
         "    var b=box(e),dx=b.x-c.x,dy=b.y-c.y;\n" +
@@ -750,27 +806,119 @@ public class MainActivity extends Activity {
         "    var d=fwd+off*2;\n" +      // straight ahead beats diagonal
         "    if(d<bd){bd=d;best=e;}}\n" +
         "  if(best){mark(best);return true;}return false;}\n" +
+        "function fire(e,type,x,y){var ev=null;\n" +
+        "  try{\n" +
+        "    if(type.indexOf('pointer')===0)\n" +
+        "      ev=new PointerEvent(type,{bubbles:true,cancelable:true,\n" +
+        "        composed:true,clientX:x,clientY:y,pointerId:1,\n" +
+        "        pointerType:'mouse',isPrimary:true});\n" +
+        "    else ev=new MouseEvent(type,{bubbles:true,cancelable:true,\n" +
+        "      composed:true,view:window,clientX:x,clientY:y,button:0});\n" +
+        "  }catch(_){return}\n" +
+        "  try{e.dispatchEvent(ev)}catch(_){}}\n" +
+        // A bare .click() is not enough for a control that listens for
+        // pointer or mouse events, which is most custom menus - they simply
+        // do nothing and the button looks broken. Send what a real press
+        // produces, then the click itself.
+        "function activate(){if(!cur)return false;\n" +
+        "  var e=cur,r=e.getBoundingClientRect();\n" +
+        "  var x=r.left+r.width/2,y=r.top+r.height/2;\n" +
+        "  try{e.focus({preventScroll:true})}catch(_){}\n" +
+        "  fire(e,'pointerdown',x,y);fire(e,'mousedown',x,y);\n" +
+        "  fire(e,'pointerup',x,y);fire(e,'mouseup',x,y);\n" +
+        "  try{e.click()}catch(_){}\n" +
+        "  return true;}\n" +
+        // ---- floating cursor ----
+        // The fallback for everything the highlight cannot reach: controls
+        // bound in ways no selector finds, and hover menus, which spatial
+        // navigation cannot open at all. Off by default, because the
+        // highlight is faster whenever it does work.
+        "var curMode=false,cx=0,cy=0,dot=null,hov=null,fl=null,flT=null;\n" +
+        "function flash(m){\n" +
+        "  if(!fl){fl=document.createElement('div');\n" +
+        "    fl.style.cssText='position:fixed;left:50%;bottom:8%;'+\n" +
+        "      'transform:translateX(-50%);z-index:2147483647;'+\n" +
+        "      'pointer-events:none;font:600 14px system-ui;'+\n" +
+        "      'letter-spacing:.12em;color:#fff;background:rgba(0,0,0,.75);'+\n" +
+        "      'padding:6px 14px;border-radius:4px;opacity:0;'+\n" +
+        "      'transition:opacity .2s';\n" +
+        "    document.documentElement.appendChild(fl);}\n" +
+        "  fl.textContent=m;fl.style.opacity='1';\n" +
+        "  clearTimeout(flT);flT=setTimeout(function(){\n" +
+        "    try{fl.style.opacity='0'}catch(_){}},1600);}\n" +
+        "function draw(){\n" +
+        "  if(!dot){dot=document.createElement('div');\n" +
+        "    dot.style.cssText='position:fixed;z-index:2147483646;'+\n" +
+        "      'width:18px;height:18px;margin:-9px 0 0 -9px;'+\n" +
+        "      'border:2px solid #6cf;border-radius:50%;'+\n" +
+        "      'background:rgba(0,0,0,.35);'+\n" +
+        "      'box-shadow:0 0 0 1px #000,0 0 8px #000;pointer-events:none';\n" +
+        "    document.documentElement.appendChild(dot);}\n" +
+        "  dot.style.left=cx+'px';dot.style.top=cy+'px';\n" +
+        "  dot.style.display=curMode?'block':'none';}\n" +
+        // Hover is the whole reason this mode earns its place: a menu that
+        // only opens on mouseover is unreachable by any other means here.
+        "function hover(){var h=null;\n" +
+        "  try{h=document.elementFromPoint(cx,cy)}catch(_){}\n" +
+        "  if(!h)return;\n" +
+        "  if(h!==hov){if(hov)fire(hov,'mouseout',cx,cy);\n" +
+        "    fire(h,'mouseover',cx,cy);hov=h;}\n" +
+        "  fire(h,'mousemove',cx,cy);}\n" +
+        "function nudge(dir,fast){var step=fast?54:16,m=48;\n" +
+        "  if(dir==='left')cx-=step;else if(dir==='right')cx+=step;\n" +
+        "  else if(dir==='up')cy-=step;else cy+=step;\n" +
+        // Pushing against the top or bottom edge scrolls rather than
+        // stopping, so a long page stays reachable without leaving cursor
+        // mode to scroll and coming back.
+        "  if(cy<m){try{scrollBy(0,cy-m-step)}catch(_){}cy=m;}\n" +
+        "  if(cy>innerHeight-m){\n" +
+        "    try{scrollBy(0,cy-(innerHeight-m)+step)}catch(_){}\n" +
+        "    cy=innerHeight-m;}\n" +
+        "  cx=Math.max(2,Math.min(innerWidth-2,cx));\n" +
+        "  cy=Math.max(2,Math.min(innerHeight-2,cy));\n" +
+        "  draw();hover();}\n" +
+        "function clickAt(){var h=null;\n" +
+        "  try{h=document.elementFromPoint(cx,cy)}catch(_){}\n" +
+        "  if(!h)return false;\n" +
+        "  try{h.focus({preventScroll:true})}catch(_){}\n" +
+        "  fire(h,'pointerdown',cx,cy);fire(h,'mousedown',cx,cy);\n" +
+        "  fire(h,'pointerup',cx,cy);fire(h,'mouseup',cx,cy);\n" +
+        "  try{h.click()}catch(_){}\n" +
+        "  return true;}\n" +
+        // Called from onNewIntent. The shortcut button is FREE on a
+        // launched site - __ambientRelaunch only exists on AMBIENT's own
+        // page - so one hardware button means the playback lock at home
+        // and the cursor toggle out here, with no collision.
+        "window.__ambientCursor=function(){\n" +
+        "  curMode=!curMode;\n" +
+        "  if(curMode){if(cur)cur.classList.remove('__ambsel');cur=null;\n" +
+        "    cx=innerWidth/2;cy=innerHeight/2;hover();}\n" +
+        "  else if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
+        "  draw();flash(curMode?'CURSOR':'HIGHLIGHT');\n" +
+        "  return true;};\n" +
         "document.addEventListener('keydown',function(ev){\n" +
         "  var k=ev.key,d=null;\n" +
         "  if(k==='ArrowRight')d='right';else if(k==='ArrowLeft')d='left';\n" +
         "  else if(k==='ArrowDown')d='down';else if(k==='ArrowUp')d='up';\n" +
         "  if(!d&&k!=='Enter')return;\n" +
+        "  if(curMode&&!typing()){\n" +
+        "    if(d){nudge(d,ev.repeat===true);\n" +
+        "      ev.preventDefault();ev.stopPropagation();return;}\n" +
+        "    clickAt();ev.preventDefault();ev.stopPropagation();return;}\n" +
         "  if(typing()){\n" +
-        // In a text field the keys belong to the field: ◄► are the text
-        // cursor and Enter submits. ▲▼ are the way OUT - without them a
-        // field you have finished with is a trap, since the page keeps
-        // focus after the keyboard closes.
+        // In a text field the keys belong to the field: left/right are the
+        // text cursor and Enter submits. Up/down are the way OUT - without
+        // them a field you have finished with is a trap, since the page
+        // keeps focus after the keyboard closes.
         "    if(d==='up'||d==='down'){\n" +
         "      try{document.activeElement.blur()}catch(_){}\n" +
         "      if(move(d)){ev.preventDefault();ev.stopPropagation();}\n" +
         "    }\n" +
         "    return;}\n" +
         "  if(d){if(move(d)){ev.preventDefault();ev.stopPropagation();}return;}\n" +
-        // Enter with nothing chosen must fall through to the page, or a
-        // site's own key handling stops working for no visible reason.
-        "  if(cur){try{cur.focus({preventScroll:true})}catch(_){}\n" +
-        "    try{cur.click()}catch(_){}\n" +
-        "    ev.preventDefault();ev.stopPropagation();}\n" +
+        // Enter with nothing chosen falls through to the page, or a site's
+        // own key handling stops working for no visible reason.
+        "  if(cur){activate();ev.preventDefault();ev.stopPropagation();}\n" +
         "},true);\n" +
         // ---- fixed chrome sitting on top of a playing video ----
         // A site pins its nav to the bottom of the viewport. Over a video
@@ -787,7 +935,7 @@ public class MainActivity extends Activity {
         "document.documentElement.appendChild(s2);\n" +
         "function vids(){return [].slice.call(\n" +
         "  document.querySelectorAll('video'));}\n" +
-        "function live(){return vids().filter(function(v){\n" +
+        "function liveVids(){return vids().filter(function(v){\n" +
         "  return !v.paused&&!v.ended;});}\n" +
         // Fixed chrome sits near the top of the DOM, so two levels under
         // body is far enough. Walking every node and calling
@@ -801,9 +949,16 @@ public class MainActivity extends Activity {
         "function owner(v){var p=v;\n" +
         "  for(var i=0;i<4&&p&&p.parentElement;i++)p=p.parentElement;\n" +
         "  return p;}\n" +
+        // NEVER hide a dialog. A modal is fixed-position exactly like a nav
+        // bar, so it was eligible for this - and hiding the thing the page
+        // is waiting for you to dismiss leaves you stuck behind an
+        // invisible wall, which is worse than any nav bar over a film.
+        "function dialogish(e,r){\n" +
+        "  try{if(e.matches&&e.matches(DLG))return true}catch(_){}\n" +
+        "  return r.width>innerWidth*0.6&&r.height>innerHeight*0.5;}\n" +
         "var wasOn=null;\n" +
         "function sweep(){\n" +
-        "  var vs=live(),on=vs.length>0;\n" +
+        "  var vs=liveVids(),on=vs.length>0;\n" +
         "  if(!on){\n" +
         "    if(wasOn!==false){\n" +
         "      [].slice.call(document.querySelectorAll('.'+H))\n" +
@@ -817,6 +972,7 @@ public class MainActivity extends Activity {
         "    if(st.position!=='fixed'&&st.position!=='sticky')return;\n" +
         "    var r=e.getBoundingClientRect();\n" +
         "    if(r.height<10||r.width<50)return;\n" +
+        "    if(dialogish(e,r))return;\n" +
         "    for(var i=0;i<roots.length;i++)\n" +
         "      if(roots[i]&&roots[i].contains(e))return;\n" +
         "    e.classList.add(H);});\n" +
@@ -1168,7 +1324,12 @@ public class MainActivity extends Activity {
         // started, its current task has been brought to the front" and
         // delivers no intent, so testing this over ADB shows a dead button
         // that works perfectly in the hand.
-        callPage("window.__ambientRelaunch&&window.__ambientRelaunch()");
+        // AMBIENT's own page answers the first; a launched site
+        // answers the second. Neither defines the other, so one
+        // button means the playback lock at home and the cursor
+        // toggle on a site, with nothing to choose between.
+        callPage("(window.__ambientRelaunch&&window.__ambientRelaunch())"
+               + "||(window.__ambientCursor&&window.__ambientCursor())");
     }
 
     /** Run a snippet in the page from any thread. */
