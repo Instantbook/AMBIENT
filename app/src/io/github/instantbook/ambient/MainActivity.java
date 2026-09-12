@@ -877,8 +877,91 @@ public class MainActivity extends Activity {
         "  cx=Math.max(2,Math.min(innerWidth-2,cx));\n" +
         "  cy=Math.max(2,Math.min(innerHeight-2,cy));\n" +
         "  draw();hover();}\n" +
+        // ---- timeline control ----
+        // A player's scrub bar is a custom widget that wants a real drag:
+        // mousedown, a stream of mousemoves, mouseup. Synthesising that
+        // with a d-pad is hopeless, and half of them ignore a synthetic
+        // press anyway. So do not touch the bar at all - take the <video>
+        // and set currentTime, which every player on earth is built on.
+        "var scrub=null,sb=null;\n" +
+        "function fmt(t){t=Math.max(0,Math.round(t||0));\n" +
+        "  var h=Math.floor(t/3600),m=Math.floor(t%3600/60),s=t%60;\n" +
+        "  function p(n){return (n<10?'0':'')+n;}\n" +
+        "  return (h?h+':'+p(m):''+m)+':'+p(s);}\n" +
+        "function bar(){\n" +
+        "  if(!sb){sb=document.createElement('div');\n" +
+        "    sb.style.cssText='position:fixed;left:50%;bottom:13%;'+\n" +
+        "      'transform:translateX(-50%);z-index:2147483647;'+\n" +
+        "      'pointer-events:none;min-width:320px;font:600 13px system-ui;'+\n" +
+        "      'letter-spacing:.1em;color:#fff;background:rgba(0,0,0,.8);'+\n" +
+        "      'padding:10px 14px;border-radius:6px;display:none';\n" +
+        "    document.documentElement.appendChild(sb);}\n" +
+        "  return sb;}\n" +
+        "function showScrub(){var v=scrub,e=bar();\n" +
+        "  if(!v||!v.isConnected){e.style.display='none';return;}\n" +
+        "  var d=v.duration,p=v.currentTime||0;\n" +
+        "  var pct=(isFinite(d)&&d>0)?(100*p/d):0;\n" +
+        "  e.innerHTML='<div style=\"display:flex;justify-content:space-between;'+\n" +
+        "    'gap:24px\"><span>TIMELINE &#9668;&#9658; 10s &#9650;&#9660; 60s'+\n" +
+        "    ' &#183; OK done</span><span>'+fmt(p)+' / '+\n" +
+        "    (isFinite(d)?fmt(d):'live')+'</span></div>'+\n" +
+        "    '<div style=\"height:4px;background:rgba(255,255,255,.25);'+\n" +
+        "    'margin-top:8px;border-radius:2px;overflow:hidden\">'+\n" +
+        "    '<div style=\"height:100%;background:#6cf;width:'+\n" +
+        "    pct.toFixed(1)+'%\"></div></div>';\n" +
+        "  e.style.display='block';}\n" +
+        "function startScrub(v){scrub=v;showScrub();flash('TIMELINE');}\n" +
+        "function endScrub(){scrub=null;bar().style.display='none';\n" +
+        "  flash('CURSOR');}\n" +
+        "function seek(dt){var v=scrub;if(!v)return;\n" +
+        "  var d=v.duration;\n" +
+        "  if(!isFinite(d)||d<=0){flash('LIVE - NO TIMELINE');return;}\n" +
+        "  try{v.currentTime=\n" +
+        "    Math.max(0,Math.min(d-0.25,(v.currentTime||0)+dt))}catch(_){}\n" +
+        "  showScrub();}\n" +
+        // Is this thing a scrub bar? Players label them, one way or
+        // another, and four levels up covers the usual wrapper nesting.
+        "function sliderish(e){\n" +
+        "  for(var n=e,i=0;n&&i<4;n=n.parentElement,i++){\n" +
+        "    var t=(n.tagName||'').toUpperCase();\n" +
+        "    if(t==='INPUT'&&/range/i.test(n.type||''))return true;\n" +
+        "    var r='';try{r=n.getAttribute('role')||''}catch(_){}\n" +
+        "    if(/slider|progressbar/i.test(r))return true;\n" +
+        "    var c=n.className;\n" +
+        "    if(c&&c.baseVal!==undefined)c=c.baseVal;\n" +
+        "    c=(typeof c==='string'?c:'')+' '+(n.id||'');\n" +
+        "    if(/seek|scrub|timeline|progress|playbar|slider/i.test(c))\n" +
+        "      return true;}\n" +
+        "  return false;}\n" +
+        "function pickVideo(){var vs=vids(),best=null,ba=0;\n" +
+        "  for(var i=0;i<vs.length;i++){var v=vs[i];\n" +
+        "    var r=v.getBoundingClientRect(),a=r.width*r.height;\n" +
+        "    if(a<1600)continue;\n" +
+        "    if(cx>=r.left&&cx<=r.right&&cy>=r.top&&cy<=r.bottom+60)return v;\n" +
+        "    if(a>ba){best=v;ba=a;}}\n" +
+        "  return best;}\n" +
+        // "Near the timeline" taken literally: the bottom strip of the
+        // picture, which is where every player puts its bar, plus a little
+        // slack below for controls drawn outside the video box.
+        "function nearTimeline(){var vs=vids();\n" +
+        "  for(var i=0;i<vs.length;i++){\n" +
+        "    var r=vs[i].getBoundingClientRect();\n" +
+        "    if(r.width<80||r.height<60)continue;\n" +
+        "    if(cx<r.left||cx>r.right)continue;\n" +
+        "    var lip=Math.max(44,r.height*0.22);\n" +
+        "    if(cy>r.bottom-lip&&cy<r.bottom+48)return vs[i];}\n" +
+        "  return null;}\n" +
         "function clickAt(){var h=null;\n" +
         "  try{h=document.elementFromPoint(cx,cy)}catch(_){}\n" +
+        // OK is what leaves the timeline again, so the mode cannot trap.
+        "  if(scrub){endScrub();return true;}\n" +
+        // Deliberately NO synthetic click when taking the timeline: a click
+        // on a seek bar jumps to wherever the cursor happens to be, and
+        // being thrown somewhere you did not ask for is a worse start than
+        // simply having control from where you are.
+        "  var sv=(h&&sliderish(h))?pickVideo():nearTimeline();\n" +
+        "  if(sv&&isFinite(sv.duration)&&sv.duration>0){\n" +
+        "    startScrub(sv);return true;}\n" +
         "  if(!h)return false;\n" +
         "  try{h.focus({preventScroll:true})}catch(_){}\n" +
         "  fire(h,'pointerdown',cx,cy);fire(h,'mousedown',cx,cy);\n" +
@@ -893,7 +976,8 @@ public class MainActivity extends Activity {
         "  curMode=!curMode;\n" +
         "  if(curMode){if(cur)cur.classList.remove('__ambsel');cur=null;\n" +
         "    cx=innerWidth/2;cy=innerHeight/2;hover();}\n" +
-        "  else if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
+        "  else {if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
+        "    if(scrub){scrub=null;bar().style.display='none';}}\n" +
         "  draw();flash(curMode?'CURSOR':'HIGHLIGHT');\n" +
         "  return true;};\n" +
         "document.addEventListener('keydown',function(ev){\n" +
@@ -902,6 +986,13 @@ public class MainActivity extends Activity {
         "  else if(k==='ArrowDown')d='down';else if(k==='ArrowUp')d='up';\n" +
         "  if(!d&&k!=='Enter')return;\n" +
         "  if(curMode&&!typing()){\n" +
+        "    if(scrub){\n" +
+        "      if(d==='left')seek(ev.repeat?-30:-10);\n" +
+        "      else if(d==='right')seek(ev.repeat?30:10);\n" +
+        "      else if(d==='up')seek(60);\n" +
+        "      else if(d==='down')seek(-60);\n" +
+        "      else endScrub();\n" +
+        "      ev.preventDefault();ev.stopPropagation();return;}\n" +
         "    if(d){nudge(d,ev.repeat===true);\n" +
         "      ev.preventDefault();ev.stopPropagation();return;}\n" +
         "    clickAt();ev.preventDefault();ev.stopPropagation();return;}\n" +
@@ -977,7 +1068,7 @@ public class MainActivity extends Activity {
         "      if(roots[i]&&roots[i].contains(e))return;\n" +
         "    e.classList.add(H);});\n" +
         "  wasOn=true;}\n" +
-        "setInterval(sweep,1000);\n" +
+        "setInterval(function(){sweep();if(scrub)showScrub();},1000);\n" +
         // No auto-selection on load: picking a target unasked moved focus
         // on pages that were working fine.
         "})();";
