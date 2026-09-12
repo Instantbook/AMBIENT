@@ -150,7 +150,7 @@ export default {
       const clean = st ? {
         title: String(st.title || "").slice(0, 80),
         location: String(st.location || "").slice(0, 80),
-        summary: String(st.summary || "").slice(0, 1200),
+        summary: String(st.summary || "").slice(0, 600),
         inventory: (Array.isArray(st.inventory) ? st.inventory : [])
           .slice(0, 12).map(x => String(x).slice(0, 40)),
         chapter: Math.max(1, Math.min(99, parseInt(st.chapter, 10) || 1)),
@@ -169,7 +169,7 @@ export default {
         "different in KIND - not three ways to do the same thing - and " +
         "never label them with letters or numbers.\n" +
         "- state: the updated world. summary is a running account of what " +
-        "has happened, under 900 characters, rewritten each turn rather " +
+        "has happened, under 450 characters, rewritten each turn rather " +
         "than appended to. You will be given the last three exchanges " +
         "verbatim next turn, so the summary carries everything OLDER " +
         "than those - anything it drops is gone for good. Keep " +
@@ -239,8 +239,14 @@ export default {
             "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-5",
-            max_tokens: 8000,
+            /* Haiku. Measured against Sonnet and Opus on the same
+               twelve-turn game, this is the only lever that moved the bill
+               much: prose is most of the value and none of the difficulty.
+               NOTE two Haiku-4.5 quirks - output_config.effort errors on
+               this model, and thinking takes budget_tokens rather than
+               adaptive, so omitting it entirely is how you get none. */
+            model: "claude-haiku-4-5",
+            max_tokens: 4000,
             /* Sonnet at medium effort. A turn of prose is not
                intelligence-bound, and on a worn display every second is
                one spent watching a blank panel - so the cheaper, faster
@@ -249,10 +255,7 @@ export default {
                are an Opus/Fable feature, and stop_reason is still checked
                below, so a declined turn reports itself rather than
                silently returning nothing. */
-            output_config: {
-              effort: "medium",
-              format: { type: "json_schema", schema: SCHEMA },
-            },
+            output_config: { format: { type: "json_schema", schema: SCHEMA } },
             system: SYS,
             messages: [{ role: "user", content: prompt }],
           }),
