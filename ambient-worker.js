@@ -112,6 +112,141 @@ export default {
       }
     }
 
+    /* ---- tale: one turn of a text adventure ----
+       The whole story never goes to the model. Each turn sends a compact
+       state object - a running summary, location, inventory, chapter - and
+       the choice just taken, so a request costs the same on turn 3 as on
+       turn 300. Growing a transcript instead would get slower and dearer
+       every turn and eventually hit the context window. */
+    if (url.pathname === "/tale") {
+      if (req.method !== "POST")
+        return json({ error: "POST only" }, 405, env);
+      if (!env.ANTHROPIC_API_KEY)
+        return json({ error: "no API key on this worker" }, 503, env);
+      let body;
+      try { body = await req.json(); }
+      catch (e) { return json({ error: "bad json" }, 400, env); }
+
+      const cat = String(body.category || "").slice(0, 60);
+      const choice = String(body.choice || "").slice(0, 200);
+      const st = body.state && typeof body.state === "object"
+        ? body.state : null;
+
+      /* Caps are enforced HERE, not just requested in the prompt: a state
+         object is round-tripped through the client, so it is only as
+         bounded as the server makes it. */
+      const clean = st ? {
+        title: String(st.title || "").slice(0, 80),
+        location: String(st.location || "").slice(0, 80),
+        summary: String(st.summary || "").slice(0, 1200),
+        inventory: (Array.isArray(st.inventory) ? st.inventory : [])
+          .slice(0, 12).map(x => String(x).slice(0, 40)),
+        chapter: Math.max(1, Math.min(99, parseInt(st.chapter, 10) || 1)),
+      } : null;
+
+      const SYS =
+        "You are the narrator of an ORIGINAL interactive text adventure. " +
+        "Invent your own world, characters and names - never use settings, " +
+        "characters or plots from existing books, films or games.\n\n" +
+        "Every turn you return:\n" +
+        "- prose: 80-130 words, second person, present tense. Concrete and " +
+        "sensory. Advance the situation; do not recap what the player just " +
+        "did. End at a moment that demands a decision.\n" +
+        "- choices: exactly 3 or 4 options, each under 60 characters, " +
+        "phrased as actions the player takes. Make them genuinely " +
+        "different in KIND - not three ways to do the same thing - and " +
+        "never label them with letters or numbers.\n" +
+        "- state: the updated world. summary is a running account of what " +
+        "has happened, under 900 characters, rewritten each turn rather " +
+        "than appended to - it is the ONLY memory you will be given next " +
+        "turn, so it must carry anything that matters. Keep inventory to " +
+        "what the player actually holds.\n\n" +
+        "Let consequences stick. A choice that should end badly may end " +
+        "badly. Set ending true only when the story genuinely concludes - " +
+        "aim for somewhere between 12 and 25 turns, not sooner.";
+
+      const prompt = clean
+        ? "Continue the adventure.\n\nSTATE:\n" +
+          JSON.stringify(clean, null, 1) +
+          "\n\nThe player chose: " + (choice || "(nothing - begin the turn)")
+        : "Begin a new adventure. Category: " + (cat || "any") +
+          ".\n\nOpen in the middle of something already happening - no " +
+          "preamble, no character creation, no explanation of the rules. " +
+          "Give it a short evocative title.";
+
+      const SCHEMA = {
+        type: "object",
+        properties: {
+          prose: { type: "string" },
+          choices: { type: "array", items: { type: "string" } },
+          state: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              location: { type: "string" },
+              summary: { type: "string" },
+              inventory: { type: "array", items: { type: "string" } },
+              chapter: { type: "integer" },
+              ending: { type: "boolean" },
+            },
+            required: ["title", "location", "summary", "inventory",
+                       "chapter", "ending"],
+            additionalProperties: false,
+          },
+        },
+        required: ["prose", "choices", "state"],
+        additionalProperties: false,
+      };
+
+      try {
+        const r = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": env.ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            /* A policy decline would otherwise just stop the turn dead
+               mid-story; this re-runs it on a fallback inside the same
+               call. */
+            "anthropic-beta": "server-side-fallback-2026-07-01",
+          },
+          body: JSON.stringify({
+            model: "claude-opus-5",
+            max_tokens: 8000,
+            fallbacks: "default",
+            /* medium, not the default high: a turn of prose is not
+               intelligence-bound, and every second here is a second
+               someone sits watching a blank panel. */
+            output_config: {
+              effort: "medium",
+              format: { type: "json_schema", schema: SCHEMA },
+            },
+            system: SYS,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          return json({ error: "api " + r.status,
+                        detail: t.slice(0, 300) }, 502, env);
+        }
+        const d = await r.json();
+        if (d.stop_reason === "refusal")
+          return json({ error: "the story was declined" }, 502, env);
+        const blk = (d.content || []).filter(b => b.type === "text")[0];
+        if (!blk) return json({ error: "empty response" }, 502, env);
+        let out;
+        try { out = JSON.parse(blk.text); }
+        catch (e) { return json({ error: "unparseable turn" }, 502, env); }
+        out.usage = d.usage
+          ? { in: d.usage.input_tokens, out: d.usage.output_tokens }
+          : null;
+        return json(out, 200, env);
+      } catch (e) {
+        return json({ error: "fetch failed" }, 502, env);
+      }
+    }
+
     /* ---- podcast: one show's episodes ----
        Podcast feeds are not CORS-clean (checked: 200 with no
        Access-Control-Allow-Origin on both libsyn and feedburner), so the

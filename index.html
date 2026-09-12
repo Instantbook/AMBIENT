@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v86";
+const APP_VERSION="v87";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -299,6 +299,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.podcasts.subs","ambient.card.podcasts.pos",
   "ambient.card.podcasts.seen","ambient.card.podcasts.got",
   "ambient.card.podcasts.auto","ambient.card.podcasts.keep",
+  "ambient.card.tale.saves",
   "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
@@ -3499,6 +3500,217 @@ const cardPodcasts={
   }
 };
 
+/* ---- adventure ----
+   A text adventure told by Claude through the Worker's /tale. The whole
+   story never goes to the model: each turn sends a compact state object -
+   a running summary, location, inventory, chapter - so turn 300 costs what
+   turn 3 did. Saves keep that same object, which is why resuming a game
+   from six months ago is the same operation as taking the next turn. */
+const cardTale={
+  id:"tale",title:"ADVENTURE",icon:"layers",prefersFull:true,
+  pane:"web",size:"large",order:56,refresh:null,offline:"live-only",
+  sel:0,_level:"home",_turn:null,_cur:null,_busy:false,_note:"",_arm:-1,
+  _ctx:null,
+  /* Settings, not stories - the model invents the rest. Deliberately
+     ordinary genres: a good opening needs a familiar frame to subvert, and
+     anything more specific starts to write the adventure for it. */
+  CATS:["a derelict starship","a haunted manor","a drowned city",
+    "a rain-slick noir city","a polar expedition","a jungle ruin",
+    "a desert caravan","an old-growth forest","a city beneath the city",
+    "a lighthouse in a storm","an airship above the clouds",
+    "a quarantined town"],
+
+  init(ctx){this._ctx=ctx},
+  _saves(){
+    const s=this._ctx?this._ctx.storage.get("saves",[]):[];
+    return Array.isArray(s)?s:[];
+  },
+  _put(ctx,list){ctx.storage.set("saves",list.slice(0,6))},
+  _ago(t){
+    const s=Math.max(0,(Date.now()-(t||0))/1000);
+    if(s<3600)return Math.round(s/60)+"m ago";
+    if(s<86400)return Math.round(s/3600)+"h ago";
+    return Math.round(s/86400)+"d ago";
+  },
+
+  /* ---- the turn ---- */
+  _post(ctx,body,then){
+    const base=WORKER_BASE();
+    if(!base){this._note="needs the Worker URL";ctx.rerender();return}
+    this._busy=true;this._note="";ctx.rerender();
+    fetch(base+"/tale",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body),
+      signal:AbortSignal.timeout(90000)})
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.error){this._note=d.error;return}
+        if(!d.prose||!Array.isArray(d.choices)){this._note="bad turn";return}
+        then(d);
+      })
+      .catch(e=>{this._note="failed: "+String(e.message||e).slice(0,40)})
+      .then(()=>{this._busy=false;try{ctx.rerender()}catch(_){}});
+  },
+  _start(ctx,cat){
+    this._post(ctx,{category:cat},d=>{
+      this._turn=d;
+      this._cur={id:"t"+Date.now(),category:cat};
+      this._level="play";this.sel=0;
+      this._save(ctx);
+    });
+  },
+  _choose(ctx,text){
+    if(!this._turn)return;
+    this._post(ctx,{state:this._turn.state,choice:text},d=>{
+      this._turn=d;this.sel=0;this._save(ctx);
+    });
+  },
+  /* Saved after every turn, not on leaving: the card can be walked away
+     from at any moment, and a story that forgets the last thing that
+     happened is worse than one that was never saved. */
+  _save(ctx){
+    if(!this._cur||!this._turn)return;
+    const list=this._saves().filter(x=>x.id!==this._cur.id);
+    list.unshift({id:this._cur.id,category:this._cur.category,
+      title:this._turn.state.title||"untitled",
+      state:this._turn.state,prose:this._turn.prose,
+      choices:this._turn.choices,at:Date.now()});
+    this._put(ctx,list);
+  },
+  _resume(ctx,sv){
+    this._cur={id:sv.id,category:sv.category};
+    this._turn={prose:sv.prose,choices:sv.choices,state:sv.state};
+    this._level="play";this.sel=0;this._note="";ctx.rerender();
+  },
+  _del(ctx,sv){
+    this._put(ctx,this._saves().filter(x=>x.id!==sv.id));
+    this._arm=-1;this._note="deleted";
+    this.sel=Math.min(this.sel,this._rows().length-1);
+    ctx.rerender();
+  },
+
+  /* ---- rows ---- */
+  _rows(){
+    if(this._level==="pick")
+      return [{cat:null,label:"SURPRISE ME",meta:"any setting"}]
+        .concat(this.CATS.map(c=>({cat:c,label:c.toUpperCase(),meta:""})));
+    if(this._level==="play"){
+      if(!this._turn)return [];
+      if(this._turn.state&&this._turn.state.ending)
+        return [{again:true,label:"START ANOTHER",meta:"this story is over"}];
+      return this._turn.choices.map(c=>({choice:c,label:c,meta:""}));
+    }
+    const rows=[{fresh:true,label:"NEW ADVENTURE",meta:"choose a setting"}];
+    this._saves().forEach(s=>rows.push({save:s,label:s.title,
+      meta:"ch "+((s.state&&s.state.chapter)||1)+" · "+this._ago(s.at)}));
+    return rows;
+  },
+
+  _enter(ctx){
+    const r=this._rows()[this.sel];
+    if(!r||this._busy)return;
+    if(this._arm===this.sel&&r.save){this._del(ctx,r.save);return}
+    if(r.fresh||r.again){this._level="pick";this.sel=0;this._arm=-1;
+      this._note="";ctx.rerender();return}
+    if(r.cat!==undefined&&r.cat!==null){this._start(ctx,r.cat);return}
+    if(r.cat===null){
+      this._start(ctx,this.CATS[Math.floor(Math.random()*this.CATS.length)]);
+      return;
+    }
+    if(r.save){this._resume(ctx,r.save);return}
+    if(r.choice){this._choose(ctx,r.choice);return}
+  },
+
+  onKey(ctx,k,held){
+    const rows=this._rows();
+    if(this._busy)return k==="enter";      /* swallow, never queue a turn */
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;this._arm=-1;
+      ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._arm=-1;ctx.rerender();
+      return true}
+    if(k==="enter"){this._enter(ctx);return true}
+    const r=rows[this.sel];
+    if(k==="right"&&r&&r.save){
+      this._arm=this._arm===this.sel?-1:this.sel;ctx.rerender();return true;
+    }
+    if(k==="left"&&this._arm>=0){this._arm=-1;ctx.rerender();return true}
+    return false;
+  },
+  onBack(ctx){
+    if(this._arm>=0){this._arm=-1;ctx.rerender();return true}
+    if(this._level==="play"||this._level==="pick"){
+      this._level="home";this.sel=0;this._note="";ctx.rerender();return true;
+    }
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._enter(ctx)},
+
+  render(ctx){
+    const rows=this._rows(),w=rowWindow(this,rows,this.sel);
+    const list=w.items.map((r,j)=>{
+      const i=w.start+j,on=(i===this.sel),armed=(i===this._arm);
+      return "<div class='row"+(on?" hl sel":"")+"' data-row='"+i+"'>"+
+        "<span class='"+(on?"":"lbl")+"'"+
+        (this._level==="play"?" style='white-space:normal'":"")+">"+
+        esc(r.label)+"</span><span class='lbl' style='font-size:12px"+
+        (armed?";color:var(--down)":"")+"'>"+
+        (armed?"delete?":esc(r.meta||""))+"</span></div>";
+    }).join("");
+
+    if(this._level==="play"&&this._turn){
+      const st=this._turn.state||{};
+      return "<div style='margin-bottom:10px'>"+
+        "<div style='color:var(--accent);font-size:15px'>"+
+        esc(st.title||"")+"</div><div class='lbl'>"+esc(st.location||"")+
+        " · chapter "+(st.chapter||1)+
+        ((st.inventory&&st.inventory.length)
+          ?" · carrying "+esc(st.inventory.join(", ")):"")+
+        "</div></div>"+
+        "<div style='white-space:normal;line-height:1.55;margin-bottom:14px'>"+
+        esc(this._turn.prose)+"</div>"+
+        (st.ending?"<div class='lbl' style='color:var(--accent);"+
+          "margin-bottom:10px'>THE END</div>":"")+
+        (this._busy
+          ?"<div class='state'>the story is thinking… (about 12s)</div>"
+          :list)+
+        (this._note?"<div class='state' style='color:var(--warn)'>"+
+          esc(this._note)+"</div>":"")+
+        "<div class='state' style='margin-top:10px'>▲▼ choose · OK commit"+
+        " · BACK saves and leaves</div>";
+    }
+
+    const head=this._level==="pick"
+      ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>CHOOSE A SETTING</div><div class='lbl'>"+
+       "the rest is invented as you go</div></div>"
+      :"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>ADVENTURE</div><div class='lbl'>"+
+       this._saves().length+" saved · up to 6</div></div>";
+    return head+
+      (this._busy?"<div class='state'>opening a way in… (about 12s)</div>"
+        :list)+
+      (this._note?"<div class='state' style='margin-top:6px;"+
+        "color:var(--warn)'>"+esc(this._note)+"</div>":"")+
+      "<div class='state' style='margin-top:10px'>▲▼ choose · OK "+
+      (this._level==="pick"?"begin":"open")+
+      (this._level==="home"?" · ► delete a save":"")+
+      " · BACK "+(this._level==="home"?"to tiles":"back")+"</div>";
+  },
+
+  renderCompact(ctx){
+    if(this._busy)return face("…","thinking");
+    if(this._level==="play"&&this._turn){
+      const st=this._turn.state||{};
+      return face(st.ending?"END":"ch "+(st.chapter||1),
+        esc((st.title||"").slice(0,18)),{sub:esc(st.location||"")});
+    }
+    const n=this._saves().length;
+    if(!n)return face("—","no stories yet");
+    const s=this._saves()[0];
+    return face(n,"saved",{sub:esc((s.title||"").slice(0,20))});
+  }
+};
+
 const cardVideo={
   id:"video",title:"VIDEO",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
@@ -4228,7 +4440,8 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardMusic,cardPodcasts,cardVideo,cardVis,cardLaunch,cardScenes,
+  cardRadio,cardMusic,cardPodcasts,cardVideo,cardTale,cardVis,cardLaunch,
+  cardScenes,
   cardDisplay,
   cardDevice,cardSystem]);
 /* restore the brightness chosen last time - after loadConfig(), which has
