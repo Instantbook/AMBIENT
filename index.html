@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v90";
+const APP_VERSION="v91";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3543,6 +3543,10 @@ const cardTale={
   _post(ctx,body,then){
     const base=WORKER_BASE();
     if(!base){this._note="needs the Worker URL";ctx.rerender();return}
+    /* Said before trying, because the attempt takes seconds and then
+       reports something that reads like a bug in the story engine. */
+    if(!online){this._note="no network - the story needs wifi";
+      ctx.rerender();return}
     this._busy=true;this._note="";ctx.rerender();
     fetch(base+"/tale",{method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -3554,7 +3558,16 @@ const cardTale={
         if(!d.prose||!Array.isArray(d.choices)){this._note="bad turn";return}
         then(d);
       })
-      .catch(e=>{this._note="failed: "+String(e.message||e).slice(0,40)})
+      .catch(e=>{
+        /* "Failed to fetch" is what a browser says for DNS, TLS and a
+           missing network alike - useless on a screen. Name the one that
+           is nearly always true, and keep the rest distinguishable. */
+        const m=String((e&&e.message)||e);
+        this._note=(e&&e.name==="TimeoutError")?"the story timed out"
+          :/Failed to fetch|NetworkError|Load failed/i.test(m)
+            ?"no network - the story needs wifi"
+            :"failed: "+m.slice(0,40);
+      })
       .then(()=>{this._busy=false;try{ctx.rerender()}catch(_){}});
   },
   _start(ctx,cat){
