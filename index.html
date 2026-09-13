@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v91";
+const APP_VERSION="v92";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3670,6 +3670,22 @@ const cardTale={
       ctx.rerender();return true}
     if(k==="up"&&this.sel>0){this.sel--;this._arm=-1;ctx.rerender();
       return true}
+    /* At the first choice, up is the ONLY way back to the passage. The
+       prose sits above the rows, the arrows otherwise just walk the
+       choices, and so a single press down could strand you looking at
+       options for text you could no longer read. Page through it instead
+       of doing nothing. */
+    const body=document.getElementById("stage-body");
+    if(this._level==="play"&&body){
+      const page=Math.max(60,Math.round(body.clientHeight*0.8));
+      if(k==="up"&&this.sel===0&&body.scrollTop>0){
+        body.scrollTop=Math.max(0,body.scrollTop-page);return true;
+      }
+      if(k==="down"&&this.sel===rows.length-1&&
+         body.scrollTop+body.clientHeight<body.scrollHeight-2){
+        body.scrollTop=body.scrollTop+page;return true;
+      }
+    }
     if(k==="enter"){this._enter(ctx);return true}
     const r=rows[this.sel];
     if(k==="right"&&r&&r.save){
@@ -3717,8 +3733,9 @@ const cardTale={
           :list)+
         (this._note?"<div class='state' style='color:var(--warn)'>"+
           esc(this._note)+"</div>":"")+
-        "<div class='state' style='margin-top:10px'>▲▼ choose · OK commit"+
-        " · BACK saves and leaves</div>";
+        "<div class='state' style='margin-top:10px'>▲▼ choose · ▲ at the "+
+        "top scrolls the text back · OK commit · BACK saves and leaves"+
+        "</div>";
     }
 
     const head=this._level==="pick"
