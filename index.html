@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v92";
+const APP_VERSION="v93";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3644,7 +3644,7 @@ const cardTale={
     }
     const rows=[{fresh:true,label:"NEW ADVENTURE",meta:"choose a setting"}];
     this._saves().forEach(s=>rows.push({save:s,label:s.title,
-      meta:"ch "+((s.state&&s.state.chapter)||1)+" · "+this._ago(s.at)}));
+      meta:"turn "+((s.state&&s.state.turn)||1)+" · "+this._ago(s.at)}));
     return rows;
   },
 
@@ -3719,11 +3719,20 @@ const cardTale={
       const st=this._turn.state||{};
       return "<div style='margin-bottom:10px'>"+
         "<div style='color:var(--accent);font-size:15px'>"+
-        esc(st.title||"")+"</div><div class='lbl'>"+esc(st.location||"")+
-        " · chapter "+(st.chapter||1)+
+        esc(st.title||"")+"</div><div class='lbl'>"+
+        ((st.protagonist&&st.protagonist.name)
+          ?esc(st.protagonist.name)+" · ":"")+
+        esc(st.location||"")+" · turn "+(st.turn||1)+
         ((st.inventory&&st.inventory.length)
           ?" · carrying "+esc(st.inventory.join(", ")):"")+
-        "</div></div>"+
+        "</div>"+
+        /* Who is actually in the story, so a name in the prose can be
+           placed without scrolling back through it. */
+        ((st.cast&&st.cast.length)
+          ?"<div class='lbl' style='font-size:12px;margin-top:3px'>"+
+           esc(st.cast.map(c=>c.name+" ("+c.status+")").join(" · "))+
+           "</div>":"")+
+        "</div>"+
         "<div style='white-space:normal;line-height:1.55;margin-bottom:14px'>"+
         esc(this._turn.prose)+"</div>"+
         (st.ending?"<div class='lbl' style='color:var(--accent);"+
@@ -3760,7 +3769,7 @@ const cardTale={
     if(this._busy)return face("…","thinking");
     if(this._level==="play"&&this._turn){
       const st=this._turn.state||{};
-      return face(st.ending?"END":"ch "+(st.chapter||1),
+      return face(st.ending?"END":"t"+(st.turn||1),
         esc((st.title||"").slice(0,18)),{sub:esc(st.location||"")});
     }
     const n=this._saves().length;

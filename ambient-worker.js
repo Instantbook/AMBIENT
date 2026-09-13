@@ -147,14 +147,36 @@ export default {
           prose: String((x && x.prose) || "").slice(0, 300),
         }));
 
-      const clean = st ? {
-        title: String(st.title || "").slice(0, 80),
-        location: String(st.location || "").slice(0, 80),
-        summary: String(st.summary || "").slice(0, 600),
-        inventory: (Array.isArray(st.inventory) ? st.inventory : [])
-          .slice(0, 12).map(x => String(x).slice(0, 40)),
-        chapter: Math.max(1, Math.min(99, parseInt(st.chapter, 10) || 1)),
+      const str = (v, n) => String(v == null ? "" : v).slice(0, n);
+      const cast = (arr) => (Array.isArray(arr) ? arr : []).slice(0, 8)
+        .map(c => ({
+          name: str(c && c.name, 40),
+          role: str(c && c.role, 60),
+          status: str(c && c.status, 40),
+        })).filter(c => c.name);
+
+      /* Split deliberately. IDENTITY is what the story cannot survive
+         losing - who you are, what this is called, where it is going - and
+         it is carried forward by this server, never re-asked of the model.
+         The rest is the world, and the world is allowed to move. */
+      const ident = st ? {
+        title: str(st.title, 80),
+        protagonist: {
+          name: str(st.protagonist && st.protagonist.name, 40),
+          description: str(st.protagonist && st.protagonist.description, 160),
+        },
+        arc: str(st.arc, 300),
       } : null;
+
+      const clean = st ? {
+        location: str(st.location, 80),
+        summary: str(st.summary, 900),
+        inventory: (Array.isArray(st.inventory) ? st.inventory : [])
+          .slice(0, 12).map(x => str(x, 40)),
+        cast: cast(st.cast),
+      } : null;
+      const turnNo = st
+        ? Math.max(1, Math.min(999, (parseInt(st.turn, 10) || 1) + 1)) : 1;
 
       const SYS =
         "You are the narrator of an ORIGINAL interactive text adventure. " +
@@ -168,8 +190,13 @@ export default {
         "phrased as actions the player takes. Make them genuinely " +
         "different in KIND - not three ways to do the same thing - and " +
         "never label them with letters or numbers.\n" +
-        "- state: the updated world. summary is a running account of what " +
-        "has happened, under 450 characters, rewritten each turn rather " +
+        "- state: the updated world. cast lists every named character who " +
+        "has appeared, with a role and a status such as with you, fled, " +
+        "dead, or waiting somewhere - carry ALL of them forward and update " +
+        "the status rather than dropping anyone, and never swap the " +
+        "protagonist for someone else. summary is a running account of " +
+        "what " +
+        "has happened, under 700 characters, rewritten each turn rather " +
         "than appended to. You will be given the last three exchanges " +
         "verbatim next turn, so the summary carries everything OLDER " +
         "than those - anything it drops is gone for good. Keep " +
@@ -181,9 +208,23 @@ export default {
         "once the story has ended, so do not labour over them.";
 
       const prompt = clean
-        ? "Continue the adventure.\n\nSTATE (summary covers everything " +
-          "before the recent exchanges below):\n" +
-          JSON.stringify(clean, null, 1) +
+        ? "Continue the adventure.\n\n" +
+          "FIXED - these do not change and you cannot alter them:\n" +
+          "  You are narrating to: " + ident.protagonist.name +
+          " - " + ident.protagonist.description + "\n" +
+          "  Story: " + ident.title + "\n" +
+          "  Arc: " + ident.arc + "\n\n" +
+          "CAST so far - keep every one of these; update a status, never " +
+          "drop or rename anyone, and never introduce a second " +
+          "protagonist:\n" +
+          (clean.cast.length
+            ? clean.cast.map(c => "  " + c.name + " (" + c.role + ") - " +
+                c.status).join("\n")
+            : "  (none yet)") + "\n\n" +
+          "WORLD (summary covers everything before the recent exchanges " +
+          "below):\n" +
+          JSON.stringify({ location: clean.location, summary: clean.summary,
+                           inventory: clean.inventory }, null, 1) +
           (recent.length
             ? "\n\nRECENT, oldest first - these are verbatim, and the " +
               "summary already accounts for everything earlier:\n" +
@@ -192,10 +233,46 @@ export default {
             : "") +
           "\n\nThe player chose: " + (choice || "(nothing - begin the turn)")
         : "Begin a new adventure. Category: " + (cat || "any") +
-          ".\n\nOpen in the middle of something already happening - no " +
+          ".\n\nName the protagonist and say in a line who they are - that\n" +
+          "identity is fixed for the whole story. Give the arc in one sentence:\n" +
+          "the rough shape you intend, which you will be held to.\n\n" +
+          "Open in the middle of something already happening - no " +
           "preamble, no character creation, no explanation of the rules. " +
           "Give it a short evocative title.";
 
+      /* Two schemas, and that IS the enforcement. On a continuation turn
+         title, protagonist and arc are simply not in the shape the model
+         can return, so they cannot drift - which is the failure this
+         exists to stop: ten turns in, the story was addressing a
+         protagonist it had quietly replaced. turn is counted here too,
+         since a model asked to keep a number in its head will not. */
+      const CAST = {
+        /* No maxItems: structured outputs reject it outright, just as
+           they reject any minItems but 0 or 1. Array cardinality is
+           simply not expressible here - the server slice(0,8) below
+           is the only cap that exists, which is the right place for
+           it anyway. */
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            role: { type: "string" },
+            status: { type: "string" },
+          },
+          required: ["name", "role", "status"],
+          additionalProperties: false,
+        },
+      };
+      const WORLD = {
+        location: { type: "string" },
+        summary: { type: "string" },
+        inventory: { type: "array", items: { type: "string" } },
+        cast: CAST,
+        ending: { type: "boolean" },
+      };
+      const WORLD_REQ = ["location", "summary", "inventory", "cast",
+                         "ending"];
       const SCHEMA = {
         type: "object",
         properties: {
@@ -211,18 +288,27 @@ export default {
           choices: {
             type: "array", items: { type: "string" }, minItems: 1,
           },
-          state: {
+          state: clean ? {
             type: "object",
-            properties: {
+            properties: WORLD,
+            required: WORLD_REQ,
+            additionalProperties: false,
+          } : {
+            type: "object",
+            properties: Object.assign({
               title: { type: "string" },
-              location: { type: "string" },
-              summary: { type: "string" },
-              inventory: { type: "array", items: { type: "string" } },
-              chapter: { type: "integer" },
-              ending: { type: "boolean" },
-            },
-            required: ["title", "location", "summary", "inventory",
-                       "chapter", "ending"],
+              protagonist: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  description: { type: "string" },
+                },
+                required: ["name", "description"],
+                additionalProperties: false,
+              },
+              arc: { type: "string" },
+            }, WORLD),
+            required: ["title", "protagonist", "arc"].concat(WORLD_REQ),
             additionalProperties: false,
           },
         },
@@ -273,6 +359,51 @@ export default {
         let out;
         try { out = JSON.parse(blk.text); }
         catch (e) { return json({ error: "unparseable turn" }, 502, env); }
+        /* Re-attach what the model was never shown, and MERGE the cast
+           rather than taking the model's list wholesale: a character it
+           forgot to mention this turn has not left the story. */
+        const ws = out.state || {};
+        if (ident) {
+          const seen = {}, merged = [];
+          cast(clean.cast).concat(cast(ws.cast)).forEach(c => {
+            const k = c.name.toLowerCase();
+            if (seen[k]) {                       // later entry updates status
+              if (c.status) seen[k].status = c.status;
+              return;
+            }
+            seen[k] = c;
+            merged.push(c);
+          });
+          out.state = {
+            title: ident.title,
+            protagonist: ident.protagonist,
+            arc: ident.arc,
+            location: str(ws.location, 80) || clean.location,
+            summary: str(ws.summary, 900) || clean.summary,
+            inventory: (Array.isArray(ws.inventory) ? ws.inventory : [])
+              .slice(0, 12).map(x => str(x, 40)),
+            cast: merged.slice(0, 8),
+            turn: turnNo,
+            ending: !!ws.ending,
+          };
+        } else {
+          out.state = {
+            title: str(ws.title, 80),
+            protagonist: {
+              name: str(ws.protagonist && ws.protagonist.name, 40),
+              description: str(ws.protagonist && ws.protagonist.description,
+                               160),
+            },
+            arc: str(ws.arc, 300),
+            location: str(ws.location, 80),
+            summary: str(ws.summary, 900),
+            inventory: (Array.isArray(ws.inventory) ? ws.inventory : [])
+              .slice(0, 12).map(x => str(x, 40)),
+            cast: cast(ws.cast),
+            turn: 1,
+            ending: !!ws.ending,
+          };
+        }
         out.usage = d.usage
           ? { in: d.usage.input_tokens, out: d.usage.output_tokens }
           : null;
