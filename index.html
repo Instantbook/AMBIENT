@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v89";
+const APP_VERSION="v90";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1092,7 +1092,11 @@ function renderCard(card){
        the list still while the selection is already visible. */
     const cur=host.querySelector(".sel");
     if(cur&&cur.scrollIntoView){
-      try{cur.scrollIntoView({block:"start"})}catch(e){}
+      /* "start" suits a plain list, where the rows ARE the content. A
+         card with prose above its rows needs "nearest", or scrolling the
+         chosen row to the top pushes the passage it refers to off the
+         screen entirely. */
+      try{cur.scrollIntoView({block:card.selAnchor||"start"})}catch(e){}
     }
     /* Where am I in this list? With four rows visible and hundreds of
        them, a scrollbar the stage does not draw is not an answer; the
@@ -3508,6 +3512,8 @@ const cardPodcasts={
    from six months ago is the same operation as taking the next turn. */
 const cardTale={
   id:"tale",title:"ADVENTURE",icon:"layers",prefersFull:true,
+  /* the passage is the content here; the choices only refer to it */
+  selAnchor:"nearest",
   pane:"web",size:"large",order:56,refresh:null,offline:"live-only",
   sel:0,_level:"home",_turn:null,_cur:null,_busy:false,_note:"",_arm:-1,
   _ctx:null,
@@ -3554,7 +3560,7 @@ const cardTale={
   _start(ctx,cat){
     this._recent=[];
     this._post(ctx,{category:cat},d=>{
-      this._turn=d;
+      this._turn=d;this._toTop();
       this._cur={id:"t"+Date.now(),category:cat};
       this._level="play";this.sel=0;
       this._save(ctx);
@@ -3569,7 +3575,8 @@ const cardTale={
     const prev=(this._recent||[]).concat(
       [{choice:text,prose:this._turn.prose}]).slice(-3);
     this._post(ctx,{state:this._turn.state,choice:text,recent:prev},d=>{
-      this._recent=prev;this._turn=d;this.sel=0;this._save(ctx);
+      this._recent=prev;this._turn=d;this.sel=0;this._toTop();
+      this._save(ctx);
     });
   },
   /* Saved after every turn, not on leaving: the card can be walked away
@@ -3584,11 +3591,21 @@ const cardTale={
       choices:this._turn.choices,recent:this._recent||[],at:Date.now()});
     this._put(ctx,list);
   },
+  /* Runs after renderCard has already scrolled the selection into view,
+     so this wins: a passage you have not read yet must start at line one,
+     not wherever the highlighted choice happens to sit. */
+  _toTop(){
+    setTimeout(()=>{
+      const b=document.getElementById("stage-body");
+      if(b)b.scrollTop=0;
+    },0);
+  },
   _resume(ctx,sv){
     this._cur={id:sv.id,category:sv.category};
     this._turn={prose:sv.prose,choices:sv.choices,state:sv.state};
     this._recent=Array.isArray(sv.recent)?sv.recent:[];
     this._level="play";this.sel=0;this._note="";ctx.rerender();
+    this._toTop();
   },
   _del(ctx,sv){
     this._put(ctx,this._saves().filter(x=>x.id!==sv.id));
