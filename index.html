@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v93";
+const APP_VERSION="v94";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -300,6 +300,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.podcasts.seen","ambient.card.podcasts.got",
   "ambient.card.podcasts.auto","ambient.card.podcasts.keep",
   "ambient.card.tale.saves",
+  "ambient.card.markets.syms",
   "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
@@ -1638,15 +1639,59 @@ const cardWeather={
 };
 
 /* ---- markets ---- */
+/* ---- markets ----
+   The instruments are a USER LIST now, not two hardcoded feeds. One Worker
+   endpoint serves all of them because Yahoo answers equities, ETFs, crypto
+   and FX in the same shape - AAPL, XIU.TO, BTC-USD and USDCAD=X are the
+   same call - so adding a stock costs nothing the card did not already do.
+   The list rides config.json like the radio favourites, so it survives a
+   wipe. */
 const cardMarkets={
   id:"markets",title:"MARKETS",icon:"chart",
   pane:"dashboard",size:"medium",order:30,refresh:300,offline:"cached",
-  sources:[
-    {key:"fx",origin:"direct",path:"https://open.er-api.com/v6/latest/CAD"},
-    {key:"crypto",origin:"direct",path:
-      "https://api.coingecko.com/api/v3/simple/price"+
-      "?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"}
-  ],
+  /* the phone can post a symbol straight at this card */
+  accepts:["symbol"],
+  sel:0,_arm:-1,_rot:0,_note:"",_ctx:null,
+  DEFAULTS:["BTC-USD","ETH-USD","USDCAD=X","AAPL"],
+  sources:[{key:"q",origin:"worker",
+    path:"/quote?symbols=BTC-USD,ETH-USD,USDCAD%3DX,AAPL"}],
+
+  init(ctx){
+    this._ctx=ctx;
+    this._sync();
+    document.addEventListener("change",e=>{
+      if(e.target&&e.target.id==="mk-in"&&e.target.value.trim()){
+        const v=e.target.value.trim();e.target.value="";
+        try{e.target.blur()}catch(_){}
+        this._add(ctx,v);
+      }
+    });
+    /* The tile shows ONE instrument and moves on. A 118px square cannot
+       hold four rows legibly, and a static pick means the other three are
+       only ever visible by opening the card. */
+    setInterval(()=>{
+      const n=this._syms().length;
+      if(n<2)return;
+      this._rot=(this._rot+1)%n;
+      try{renderCard(this)}catch(e){}
+    },5000);
+  },
+
+  _syms(){
+    const s=this._ctx?this._ctx.storage.get("syms",null):null;
+    return (Array.isArray(s)&&s.length)?s:this.DEFAULTS;
+  },
+  /* sources is declared rather than literal: rebuilt whenever the list
+     changes, so the shared refresh scheduler picks the new symbols up on
+     its next pass without knowing anything about this card. */
+  _sync(){
+    this.sources=[{key:"q",origin:"worker",
+      path:"/quote?symbols="+encodeURIComponent(this._syms().join(","))}];
+  },
+  _quotes(ctx,data){
+    const d=(data&&data.q)||ctx.cachedOnly("q");
+    return Array.isArray(d)?d:[];
+  },
   _hist(ctx,sym,val){
     const h=ctx.storage.get("hist",{});
     const a=h[sym]||[];
@@ -1654,56 +1699,110 @@ const cardMarkets={
       h[sym]=a.slice(-24);ctx.storage.set("hist",h)}
     return h[sym]||[];
   },
-  render(ctx,data){
-    const fx=(data&&data.fx)||ctx.cachedOnly("fx");
-    const cr=(data&&data.crypto)||ctx.cachedOnly("crypto");
-    let rows="";
-    if(fx&&fx.rates){
-      const fxrow=(sym,v,dec)=>{
-        const hist=this._hist(ctx,sym,v);
-        return "<div class='row'><span class='lbl'>"+sym+"</span>"+
-          "<span>"+sparkline(hist,64,16)+" <span class='val'>"+
-          v.toFixed(dec)+"</span></span></div>";
-      };
-      rows+=fxrow("CAD → EUR",fx.rates.EUR,4)+
-            fxrow("CAD → USD",fx.rates.USD,4);
-    }
-    if(cr&&cr.bitcoin){
-      const coin=(id,sym)=>{
-        const c=cr[id],ch=c.usd_24h_change||0;
-        /* Keyed by currency: the stored series is a plain list of numbers
-           with no units, so switching CAD -> USD would have appended
-           US prices onto a Canadian history and drawn a cliff in the
-           sparkline that never happened. */
-        const hist=this._hist(ctx,sym+"usd",c.usd);
-        return "<div class='row'><span class='lbl'>"+sym+
-          " <span class='"+(ch>=0?"delta-up":"delta-down")+"'>"+
-          (ch>=0?"▲":"▼")+Math.abs(ch).toFixed(1)+"%</span></span>"+
-          "<span>"+sparkline(hist,64,16)+
-          " <span class='val' style='color:"+
-          (ch>=0?"var(--up)":"var(--down)")+"'>US$"+
-          Math.round(c.usd).toLocaleString()+"</span></span></div>";
-      };
-      rows+=coin("bitcoin","BTC")+coin("ethereum","ETH");
-    }
-    return rows||"<div class='state'>awaiting data…</div>";
+  /* A price is not one kind of number: bitcoin wants no decimals and a
+     thousands separator, a currency pair wants four. */
+  _fmt(v){
+    if(v==null||!isFinite(v))return "—";
+    const a=Math.abs(v);
+    if(a>=1000)return Math.round(v).toLocaleString();
+    if(a>=10)return v.toFixed(2);
+    return v.toFixed(4);
   },
-  /* aligned label/value pairs — the old version stacked bare numbers and
-     their labels on separate wrapped lines, so BTC fell off the bottom */
+  _pct(q){
+    return (q&&q.prev)?100*(q.price-q.prev)/q.prev:0;
+  },
+
+  _add(ctx,raw){
+    const sym=String(raw||"").trim().toUpperCase().slice(0,16);
+    if(!sym)return;
+    const list=this._syms().slice();
+    if(list.indexOf(sym)>=0){this._note=sym+" is already listed";
+      ctx.rerender();return}
+    if(list.length>=12){this._note="twelve is the limit";ctx.rerender();return}
+    list.push(sym);
+    ctx.storage.set("syms",list);
+    this._sync();
+    this._note="added "+sym+" · checking…";
+    ctx.rerender();
+    try{refreshCard(this,true)}catch(e){}
+  },
+  _del(ctx,sym){
+    const list=this._syms().filter(x=>x!==sym);
+    ctx.storage.set("syms",list);
+    this._sync();
+    this._arm=-1;this._note="removed "+sym;
+    if(this.sel>=list.length)this.sel=Math.max(0,list.length-1);
+    ctx.rerender();
+    try{refreshCard(this,true)}catch(e){}
+  },
+  onInject(ctx,item){if(item&&item.kind==="symbol")this._add(ctx,item.v)},
+  onText(ctx,v){this._add(ctx,v)},
+
+  onKey(ctx,k){
+    const qs=this._quotes(ctx,null);
+    if(k==="down"&&this.sel<qs.length-1){this.sel++;this._arm=-1;
+      ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._arm=-1;ctx.rerender();
+      return true}
+    const q=qs[this.sel];
+    /* Removing arms first and is confirmed with OK - the same two presses
+       LAUNCH uses, because a single key that deletes is one mis-aimed
+       thumb from losing something with no undo. */
+    if(k==="right"&&q){this._arm=this._arm===this.sel?-1:this.sel;
+      ctx.rerender();return true}
+    if(k==="left"&&this._arm>=0){this._arm=-1;ctx.rerender();return true}
+    if(k==="enter"&&this._arm===this.sel&&q){this._del(ctx,q.sym);return true}
+    return false;
+  },
+  onBack(ctx){
+    if(this._arm>=0){this._arm=-1;ctx.rerender();return true}
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._arm=i;ctx.rerender()},
+
+  render(ctx,data){
+    const qs=this._quotes(ctx,data);
+    const rows=qs.map((q,i)=>{
+      const on=(i===this.sel),armed=(i===this._arm);
+      if(q.err)
+        return "<div class='row"+(on?" hl sel":"")+"' data-row='"+i+"'>"+
+          "<span class='lbl'>"+esc(q.sym)+"</span>"+
+          "<span class='lbl' style='font-size:12px;color:"+
+          (armed?"var(--down)":"var(--warn)")+"'>"+
+          (armed?"remove?":"not found")+"</span></div>";
+      const ch=this._pct(q),up=ch>=0;
+      const hist=this._hist(ctx,q.sym,q.price);
+      return "<div class='row"+(on?" hl sel":"")+"' data-row='"+i+"'>"+
+        "<span class='"+(on?"":"lbl")+"'>"+esc(q.sym)+
+        " <span class='"+(up?"delta-up":"delta-down")+"'>"+
+        (up?"▲":"▼")+Math.abs(ch).toFixed(2)+"%</span></span>"+
+        "<span>"+(armed
+          ?"<span class='lbl' style='font-size:12px;color:var(--down)'>"+
+           "remove?</span>"
+          :sparkline(hist,64,16)+" <span class='val' style='color:"+
+           (up?"var(--up)":"var(--down)")+"'>"+this._fmt(q.price)+
+           "</span>")+"</span></div>";
+    }).join("");
+    return (rows||"<div class='state'>awaiting data…</div>")+
+      "<input type='text' id='mk-in' placeholder='add: AAPL · XIU.TO · "+
+      "BTC-USD · EURCAD=X' style='margin-top:10px'>"+
+      (this._note?"<div class='state' style='margin-top:6px;"+
+        "color:var(--accent)'>"+esc(this._note)+"</div>":"")+
+      "<div class='state' style='margin-top:8px'>▲▼ choose · ► remove "+
+      "(OK confirms) · ▼ past the last row reaches the box · a symbol "+
+      "from the phone is added too</div>";
+  },
+
+  /* One instrument at a time, cycling. Tiles are instruments: a value, a
+     label, and which of how many you are looking at. */
   renderCompact(ctx,data){
-    const fx=(data&&data.fx)||ctx.cachedOnly("fx");
-    const cr=(data&&data.crypto)||ctx.cachedOnly("crypto");
-    const rows=[];
-    if(fx&&fx.rates)rows.push(["EUR",fx.rates.EUR.toFixed(3),""]);
-    if(cr&&cr.bitcoin){
-      const ch=cr.bitcoin.usd_24h_change||0;
-      rows.push(["BTC","US$"+Math.round(cr.bitcoin.usd/1000)+"k",
-        ch>=0?"var(--up)":"var(--down)"]);
-    }
-    if(!rows.length)return face("—","awaiting data");
-    return rows.map(r=>"<div class='kv'><span class='k'>"+r[0]+
-      "</span><span class='v'"+(r[2]?" style='color:"+r[2]+"'":"")+">"+
-      r[1]+"</span></div>").join("");
+    const qs=this._quotes(ctx,data).filter(q=>!q.err);
+    if(!qs.length)return face("—","awaiting data");
+    const i=this._rot%qs.length,q=qs[i];
+    const ch=this._pct(q),up=ch>=0;
+    return face(this._fmt(q.price),esc(q.sym),
+      {color:up?"var(--up)":"var(--down)",
+       sub:(up?"▲":"▼")+Math.abs(ch).toFixed(2)+"% · "+(i+1)+"/"+qs.length});
   }
 };
 

@@ -112,6 +112,46 @@ export default {
       }
     }
 
+    /* ---- quote: whatever instruments the user has listed ----
+       One endpoint covers equities, ETFs, crypto and FX because Yahoo's
+       chart endpoint answers all of them in the same shape - AAPL, SPY,
+       BTC-USD, EURCAD=X and XIU.TO are the same call. It is not CORS
+       clean, which is why it lives here rather than in the page. */
+    if (url.pathname === "/quote") {
+      const syms = (url.searchParams.get("symbols") || "").split(",")
+        .map(x => x.trim()).filter(Boolean).slice(0, 12);
+      if (!syms.length) return json([], 200, env);
+      const out = await Promise.all(syms.map(async sym => {
+        try {
+          const r = await fetch(
+            "https://query1.finance.yahoo.com/v8/finance/chart/" +
+            encodeURIComponent(sym) + "?interval=1d&range=2d",
+            { cf: { cacheTtl: 60 },
+              headers: { "User-Agent": UA, "Accept": "application/json" } });
+          if (!r.ok) return { sym, err: "http " + r.status };
+          const d = await r.json();
+          const res = d && d.chart && d.chart.result && d.chart.result[0];
+          const m = res && res.meta;
+          if (!m || m.regularMarketPrice == null)
+            return { sym, err: "no data" };
+          /* chartPreviousClose is the close of the PRIOR session, which is
+             what a day's change is measured against; previousClose only
+             appears on some instruments. */
+          const prev = m.chartPreviousClose != null
+            ? m.chartPreviousClose
+            : (m.previousClose != null ? m.previousClose : m.regularMarketPrice);
+          return {
+            sym: String(m.symbol || sym).slice(0, 16),
+            name: String(m.shortName || m.longName || "").slice(0, 28),
+            price: m.regularMarketPrice,
+            prev,
+            cur: String(m.currency || "").slice(0, 6),
+          };
+        } catch (e) { return { sym, err: "fetch failed" }; }
+      }));
+      return json(out, 200, env);
+    }
+
     /* ---- tale: one turn of a text adventure ----
        The whole story never goes to the model. Each turn sends a compact
        state object - a running summary, location, inventory, chapter - and
