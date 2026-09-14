@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v94";
+const APP_VERSION="v95";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4392,6 +4392,7 @@ const cardDevice={
         this._s=(window.AmbientHost&&AmbientHost.stats)
           ?JSON.parse(AmbientHost.stats()):null;
       }catch(e){this._s=null}
+      this._noteBatt();
       ctx.rerender();
     };
     poll();setInterval(poll,3000);
@@ -4418,6 +4419,55 @@ const cardDevice={
     }
   },
   _g(kb){return (kb/1048576).toFixed(1)},
+  /* ---- how long is left ----
+     Measured, not assumed: the level is whole percent, so the only honest
+     estimate comes from watching it actually move. Samples live in memory
+     rather than storage - the rate must reflect what the device is doing
+     NOW, since a film drains it far faster than a dimmed dashboard, and a
+     figure restored from last week would be worse than none at all.
+     A rolling window rather than a lifetime average, for the same reason. */
+  _BATT_WIN:45*60*1000,
+  _noteBatt(){
+    const b=this._batt();
+    if(!b)return;
+    const now=Date.now();
+    if(!this._blog)this._blog=[];
+    /* Plugging in invalidates everything measured so far - and so does any
+       rise in level, which is the same event seen from the data. */
+    if(b.charging!==this._blogChg){this._blog=[];this._blogChg=b.charging}
+    const last=this._blog[this._blog.length-1];
+    if(last&&last.p===b.pct)return;              /* only on a real change */
+    if(last&&((b.charging&&b.pct<last.p)||(!b.charging&&b.pct>last.p)))
+      this._blog=[];
+    this._blog.push({t:now,p:b.pct});
+    this._blog=this._blog.filter(x=>now-x.t<=this._BATT_WIN).slice(-40);
+  },
+  _battEta(){
+    const b=this._batt();
+    if(!b||!this._blog||this._blog.length<2)return null;
+    const now=Date.now();
+    const a=this._blog.filter(x=>now-x.t<=this._BATT_WIN);
+    if(a.length<2)return null;
+    const f=a[0],l=a[a.length-1];
+    const moved=Math.abs(f.p-l.p),span=(l.t-f.t)/3600000;
+    /* One percent over five minutes is the least that can be called a
+       rate; below that the answer swings wildly and says nothing. */
+    if(moved<1||span<0.08)return null;
+    const rate=moved/span;
+    if(!isFinite(rate)||rate<=0)return null;
+    const left=b.charging?(100-b.pct):b.pct;
+    return {hours:left/rate,rate,charging:b.charging};
+  },
+  _hm(h){
+    const m=Math.max(0,Math.round(h*60));
+    if(m>=60)return Math.floor(m/60)+"h "+(m%60)+"m";
+    return m+"m";
+  },
+  _etaText(){
+    const e=this._battEta();
+    if(!e)return this._batt()?"measuring…":"";
+    return "~"+this._hm(e.hours)+(e.charging?" to full":" left");
+  },
   /* -1 from the bridge means the box HAS no battery - a mains-powered
      device reports EXTRA_PRESENT=0 - which is a different answer from
      "flat" and must not draw an empty red cell. */
@@ -4465,6 +4515,8 @@ const cardDevice={
        single rounded number - the charge counter and the two sources
        distinguish them. */
     const fine=[];
+    const eta=this._etaText();
+    if(eta)fine.push(eta);
     if(s&&s.battTempC>-50)fine.push(s.battTempC+"°C");
     /* Only shown if they are real. This box answers the standard battery
        APIs with placeholders - charge counter 10, voltage 4 - so printing
@@ -4502,8 +4554,14 @@ const cardDevice={
     /* Battery leads when there is one. On a device you carry, "how long
        have I got" beats a CPU percentage as the thing worth a glance, and
        the bar is readable at 118px in a way a second number would not be. */
-    if(b)return face(b.pct+"%",b.charging?"charging":"battery",
-      {batt:b,sub:s&&s.cpu>=0?"cpu "+s.cpu.toFixed(0)+"%":""});
+    /* The estimate displaces the cpu figure rather than joining it: one
+       line of room, and "how long have I got" beats a percentage nobody
+       acts on. */
+    if(b){
+      const eta=this._etaText();
+      return face(b.pct+"%",b.charging?"charging":"battery",
+        {batt:b,sub:eta||(s&&s.cpu>=0?"cpu "+s.cpu.toFixed(0)+"%":"")});
+    }
     const cpu=s.cpu>=0?s.cpu.toFixed(0)+"%":"—";
     return face(cpu,"cpu",{sub:this._g(s.availKb)+" GB free"});
   }
