@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v95";
+const APP_VERSION="v96";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -301,6 +301,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.podcasts.auto","ambient.card.podcasts.keep",
   "ambient.card.tale.saves",
   "ambient.card.markets.syms",
+  "ambient.card.tv.favs",
   "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
@@ -3878,6 +3879,196 @@ const cardTale={
   }
 };
 
+/* ---- live tv ----
+   A tuner, not a player. Live TV is almost entirely HLS, which Chromium
+   does not decode, and a fifth of the catalogue is plain http, which an
+   https page may not load at all - so the stream is handed to whatever on
+   the device can play it. Browsing, searching and favourites stay here;
+   the picture happens elsewhere.
+
+   Measured before building: of a sample of twenty Greek streams fifteen
+   were alive, twelve of twelve American, eight of twelve Russian. Links
+   die constantly, which is exactly why favourites matter - they are the
+   record of what actually worked. */
+const cardTV={
+  id:"tv",title:"LIVE TV",icon:"wave",prefersFull:true,
+  pane:"listen",size:"large",order:55,refresh:null,offline:"live-only",
+  sel:0,_level:"home",_cc:null,_list:null,_busy:false,_note:"",
+  _filter:"",_ctx:null,
+  COUNTRIES:[
+    ["gr","GREECE"],["cy","CYPRUS"],["us","UNITED STATES"],
+    ["ca","CANADA"],["uk","UNITED KINGDOM"],["ie","IRELAND"],
+    ["au","AUSTRALIA"],["ru","RUSSIA"],["ua","UKRAINE"],
+    ["de","GERMANY"],["fr","FRANCE"],["it","ITALY"],["es","SPAIN"],
+  ],
+
+  init(ctx){
+    this._ctx=ctx;
+    document.addEventListener("change",e=>{
+      if(e.target&&e.target.id==="tv-in"){
+        this._filter=e.target.value.trim();
+        try{e.target.blur()}catch(_){}
+        this.sel=0;ctx.rerender();
+      }
+    });
+  },
+  _favs(){
+    const f=this._ctx?this._ctx.storage.get("favs",[]):[];
+    return Array.isArray(f)?f:[];
+  },
+  _isFav(url){return this._favs().some(f=>f.url===url)},
+  _star(ctx,ch){
+    const f=this._favs();
+    const at=f.findIndex(x=>x.url===ch.url);
+    if(at>=0){f.splice(at,1);this._note="unstarred "+ch.name}
+    else{
+      if(f.length>=40){this._note="forty favourites is the limit";
+        ctx.rerender();return}
+      f.push({name:ch.name,url:ch.url,cat:ch.cat||"",cc:this._cc||ch.cc||"",
+        q:ch.q||""});
+      this._note="starred "+ch.name;
+    }
+    ctx.storage.set("favs",f);
+    ctx.rerender();
+  },
+  _open(ctx,cc){
+    this._cc=cc;this._level="channels";this.sel=0;this._filter="";
+    this._list=null;this._busy=true;this._note="";ctx.rerender();
+    const base=WORKER_BASE();
+    if(!base){this._busy=false;this._note="needs the Worker URL";
+      ctx.rerender();return}
+    if(!online){this._busy=false;this._note="no network";ctx.rerender();return}
+    fetch(base+"/tv?country="+encodeURIComponent(cc),
+      {signal:AbortSignal.timeout(25000)})
+      .then(r=>r.json())
+      .then(d=>{
+        if(d&&d.error){this._note=d.error;return}
+        this._list=Array.isArray(d)?d:[];
+        if(!this._list.length)this._note="no channels listed for this country";
+      })
+      .catch(e=>{
+        const m=String((e&&e.message)||e);
+        this._note=/Failed to fetch|NetworkError/i.test(m)
+          ?"no network":"failed: "+m.slice(0,40);
+      })
+      .then(()=>{this._busy=false;try{ctx.rerender()}catch(_){}});
+  },
+  /* The handoff. A false return means nothing on the device registered for
+     the type at all, which is a different problem from a dead stream and
+     should not be reported as one. */
+  _play(ctx,ch){
+    let ok=false;
+    try{ok=hostBridge&&hostBridge.openUrl&&hostBridge.openUrl(ch.url)}
+    catch(e){}
+    this._note=ok?"opened "+ch.name+" in the device player"
+      :"nothing on this device offered to play it";
+    ctx.rerender();
+  },
+
+  _rows(){
+    if(this._level==="channels"){
+      const q=this._filter.toLowerCase();
+      return (this._list||[])
+        .filter(c=>!q||c.name.toLowerCase().indexOf(q)>=0||
+          (c.cat||"").toLowerCase().indexOf(q)>=0)
+        .map(c=>({ch:c,label:(this._isFav(c.url)?"★ ":"")+c.name,
+          meta:[c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
+            .filter(Boolean).join(" · ")}));
+    }
+    const rows=[];
+    const favs=this._favs();
+    favs.forEach(f=>rows.push({ch:f,fav:true,label:"★ "+f.name,
+      meta:[f.cc?f.cc.toUpperCase():"",f.cat,f.q].filter(Boolean).join(" · ")}));
+    this.COUNTRIES.forEach(([cc,name])=>rows.push({cc,label:name,meta:cc}));
+    return rows;
+  },
+
+  _enter(ctx){
+    const r=this._rows()[this.sel];
+    if(!r||this._busy)return;
+    if(r.cc&&!r.ch){this._open(ctx,r.cc);return}
+    if(r.ch){this._play(ctx,r.ch);return}
+  },
+  onKey(ctx,k,held){
+    const rows=this._rows();
+    if(this._busy)return k==="enter";
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();
+      return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"){this._enter(ctx);return true}
+    const r=rows[this.sel];
+    /* Right stars, exactly as it does in RADIO - the same gesture for the
+       same idea, on the card that is most like it. */
+    if(k==="right"&&r&&r.ch){this._star(ctx,r.ch);return true}
+    if((k==="left"||k==="right")&&mode==="full"&&rows.length>pageRows()){
+      const step=pageRows()*(held?2:1);
+      this.sel=Math.max(0,Math.min(rows.length-1,
+        this.sel+(k==="left"?-step:step)));
+      ctx.rerender();return true;
+    }
+    return false;
+  },
+  onBack(ctx){
+    if(this._level==="channels"){
+      this._level="home";this.sel=0;this._note="";this._filter="";
+      ctx.rerender();return true;
+    }
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._enter(ctx)},
+
+  render(ctx){
+    if(!hostBridge)
+      return "<div class='state'>Live TV needs the AMBIENT app — a web "+
+        "page cannot hand a stream to the device's player.</div>";
+    if(!hostBridge.openUrl)
+      return "<div class='state'>This build of the app has no openUrl "+
+        "bridge yet — reinstall the APK to enable Live TV.</div>";
+    const rows=this._rows(),w=rowWindow(this,rows,this.sel);
+    const list=w.items.map((r,j)=>{
+      const i=w.start+j,on=(i===this.sel);
+      return "<div class='row"+(on?" hl sel":"")+"' data-row='"+i+"'>"+
+        "<span class='"+(on?"":"lbl")+"'>"+esc(r.label)+"</span>"+
+        "<span class='lbl' style='font-size:12px'>"+esc(r.meta||"")+
+        "</span></div>";
+    }).join("");
+    const head=this._level==="channels"
+      ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>"+esc((this.COUNTRIES.find(c=>c[0]===this._cc)||
+         [,this._cc||""])[1])+"</div><div class='lbl'>"+
+       ((this._list||[]).length)+" channels"+
+       (this._filter?" · filtered by “"+esc(this._filter)+"”":"")+
+       "</div></div>"
+      :"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+       "font-size:15px'>LIVE TV</div><div class='lbl'>"+
+       this._favs().length+" starred · pick a country</div></div>";
+    return head+
+      (this._busy?"<div class='state'>fetching the list…</div>":list)+
+      (this._level==="channels"
+        ?"<input type='text' id='tv-in' placeholder='filter by name or "+
+         "category' style='margin-top:10px'>":"")+
+      (this._note?"<div class='state' style='margin-top:6px;"+
+        "color:var(--accent)'>"+esc(this._note)+"</div>":"")+
+      "<div class='state' style='margin-top:8px'>▲▼ choose · OK "+
+      (this._level==="channels"?"play":"open")+" · ► star"+
+      (this._level==="channels"?" · ▼ past the last row reaches the filter"
+        :"")+
+      " · BACK "+(this._level==="home"?"to tiles":"up")+
+      "<br>plays in the device's own player; BACK there returns here</div>";
+  },
+
+  renderCompact(ctx){
+    if(!hostBridge)return face("—","app only");
+    if(!hostBridge.openUrl)return face("—","update app");
+    const n=this._favs().length;
+    if(this._level==="channels"&&this._list)
+      return face(this._list.length,"channels",
+        {sub:esc((this.COUNTRIES.find(c=>c[0]===this._cc)||[,""])[1])});
+    if(!n)return face(this.COUNTRIES.length,"countries",{sub:"none starred"});
+    return face(n,"starred",{sub:esc(this._favs()[0].name.slice(0,20))});
+  }
+};
+
 const cardVideo={
   id:"video",title:"VIDEO",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
@@ -4665,7 +4856,8 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardMusic,cardPodcasts,cardVideo,cardTale,cardVis,cardLaunch,
+  cardRadio,cardMusic,cardPodcasts,cardVideo,cardTV,cardTale,cardVis,
+  cardLaunch,
   cardScenes,
   cardDisplay,
   cardDevice,cardSystem]);

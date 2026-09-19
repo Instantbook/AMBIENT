@@ -330,6 +330,38 @@ public class MainActivity extends Activity {
             finally { try { if (c != null) c.close(); } catch (Throwable ig) {} }
         }
 
+        /**
+         * Hand a stream URL to whatever on this device can play it.
+         *
+         * Live TV is ~97% HLS, which Chromium does not decode, and a fifth
+         * of the catalogue is plain http, which an https page may not load
+         * at all. Both walls vanish if the platform player takes it - the
+         * same move VIDEO already makes for a file the cockpit cannot
+         * decode. AMBIENT is the tuner; something else is the screen.
+         *
+         * Two attempts, because players advertise themselves
+         * inconsistently: the precise HLS type first, then a generic
+         * video/* for the ones that only registered for that.
+         */
+        @JavascriptInterface
+        public boolean openUrl(String url) {
+            if (!atAmbient || url == null || url.isEmpty()) return false;
+            final Uri u;
+            try { u = Uri.parse(url); } catch (Throwable t) { return false; }
+            String[] types = { "application/x-mpegURL", "video/*" };
+            for (String type : types) {
+                try {
+                    android.content.Intent i = new android.content.Intent(
+                            android.content.Intent.ACTION_VIEW);
+                    i.setDataAndType(u, type);
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                    return true;
+                } catch (Throwable ignored) { /* try the next type */ }
+            }
+            return false;
+        }
+
         @JavascriptInterface
         public String mediaBase() { return atAmbient ? MEDIA_HOST : ""; }
 

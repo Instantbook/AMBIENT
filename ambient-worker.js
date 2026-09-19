@@ -112,6 +112,68 @@ export default {
       }
     }
 
+    /* ---- tv: live channels for one country ----
+       Parsed from the per-country M3U rather than the JSON index, and that
+       choice is load-bearing: the index is 7.9MB of channels plus 3.6MB of
+       streams, and parsing that per request would blow a Worker's CPU
+       budget. Greece is 13KB, the United States 322KB - the same data,
+       already grouped the way this card browses it. */
+    if (url.pathname === "/tv") {
+      const cc = (url.searchParams.get("country") || "")
+        .toLowerCase().replace(/[^a-z]/g, "").slice(0, 2);
+      if (!cc) return json({ error: "country required" }, 400, env);
+      try {
+        const r = await fetch(
+          "https://iptv-org.github.io/iptv/countries/" + cc + ".m3u",
+          { cf: { cacheTtl: 21600 },
+            headers: { "User-Agent": UA } });
+        if (!r.ok) return json({ error: "no list for " + cc }, 404, env);
+        const lines = (await r.text()).split("\n");
+        const out = [];
+        for (let i = 0; i < lines.length && out.length < 500; i++) {
+          const L = lines[i];
+          if (L.indexOf("#EXTINF") !== 0) continue;
+          /* the URL is the next line that is not a comment */
+          let u = "";
+          for (let j = i + 1; j < lines.length; j++) {
+            const n = lines[j].trim();
+            if (!n) continue;
+            if (n.charAt(0) === "#") continue;
+            u = n; break;
+          }
+          if (!u) continue;
+          let name = L.slice(L.indexOf(",") + 1).trim();
+          /* Publishers append the resolution and a "[Not 24/7]" style note
+             to the display name. Keep the resolution as its own field and
+             let the card decide whether it has room for it. */
+          let q = "";
+          const qm = /\((\d{3,4}p)\)/.exec(name);
+          if (qm) q = qm[1];
+          const part = / \[[^\]]*\]/.test(name);
+          name = name.replace(/\s*\((?:\d{3,4}p|[^)]*)\)\s*$/, "")
+                     .replace(/\s*\[[^\]]*\]\s*/g, " ")
+                     .replace(/\s*\(\d{3,4}p\)\s*/g, " ")
+                     .replace(/\s+/g, " ").trim();
+          if (!name) continue;
+          out.push({
+            name: name.slice(0, 44),
+            cat: ((/group-title="([^"]*)"/.exec(L) || [])[1] || "")
+              .slice(0, 24),
+            url: u.slice(0, 400),
+            q,
+            /* http cannot be played from the page at all; the card shows
+               it so a failure is explicable rather than mysterious */
+            s: u.indexOf("https://") === 0,
+            part,
+          });
+        }
+        out.sort((a, b) => a.name.localeCompare(b.name));
+        return json(out, 200, env);
+      } catch (e) {
+        return json({ error: "fetch failed" }, 502, env);
+      }
+    }
+
     /* ---- quote: whatever instruments the user has listed ----
        One endpoint covers equities, ETFs, crypto and FX because Yahoo's
        chart endpoint answers all of them in the same shape - AAPL, SPY,
