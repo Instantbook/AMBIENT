@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v98";
+const APP_VERSION="v99";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -302,6 +302,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.tale.saves",
   "ambient.card.markets.syms",
   "ambient.card.tv.favs",
+  "ambient.card.read.marks",
   "ambient.dim"];
 const hostBridge=(()=>{try{return window.AmbientHost||null}catch(e){return null}})();
 
@@ -4164,6 +4165,165 @@ const cardTV={
   }
 };
 
+/* ---- reader ----
+   Books live in AMBIENT/books on INTERNAL storage - an ordinary app cannot
+   read a removable volume at all, the same wall MUSIC hit.
+
+   .txt and .epub are read into the page as plain text; the unzipping and
+   the markup-flattening happen in Java, which keeps a 350KB archive off
+   the JS bridge. A .pdf is handed to whatever can render one, because a
+   page image is the wrong shape for a display six lines tall.
+
+   Paging is by SCROLL rather than by pre-computed pages: no measuring of
+   glyphs, it survives a font change, and the resume position is then just
+   a scroll offset. */
+const cardRead={
+  id:"read",title:"LIBRARY",icon:"layers",prefersFull:true,
+  pane:"web",size:"large",order:57,refresh:null,offline:"local-first",
+  sel:0,_level:"shelf",_book:null,_text:"",_note:"",_ctx:null,_busy:false,
+
+  init(ctx){this._ctx=ctx},
+  _books(){
+    try{return JSON.parse(hostBridge.listBooks()||"[]")}catch(e){return []}
+  },
+  _marks(){
+    const m=this._ctx?this._ctx.storage.get("marks",{}):{};
+    return (m&&typeof m==="object")?m:{};
+  },
+  _mark(name,frac){
+    if(!this._ctx)return;
+    const m=this._marks();
+    m[name]=Math.max(0,Math.min(1,frac||0));
+    const keys=Object.keys(m);
+    if(keys.length>60)keys.slice(0,keys.length-60).forEach(k=>delete m[k]);
+    this._ctx.storage.set("marks",m);
+  },
+  _pct(name){return Math.round(100*(this._marks()[name]||0))},
+  _kb(n){return n>=1048576?(n/1048576).toFixed(1)+" MB"
+    :Math.round(n/1024)+" KB"},
+
+  _open(ctx,b){
+    if(b.kind==="pdf"){
+      let ok=false;
+      try{ok=hostBridge.openBook(b.name)}catch(e){}
+      this._note=ok?"opened in the device's PDF viewer"
+        :"no PDF viewer answered — MediaStore may not have indexed it yet";
+      ctx.rerender();return;
+    }
+    this._busy=true;this._note="";ctx.rerender();
+    /* readBook is synchronous across the bridge; yielding first lets the
+       "opening" state actually paint before a 350KB unzip blocks. */
+    setTimeout(()=>{
+      let t="";
+      try{t=hostBridge.readBook(b.name)||""}catch(e){}
+      this._busy=false;
+      if(!t){this._note="nothing readable in "+b.name;ctx.rerender();return}
+      this._book=b;this._text=t;this._level="page";this.sel=0;
+      ctx.rerender();
+      this._restore();
+    },0);
+  },
+  /* Resume where this book was left, after the text has been laid out. */
+  _restore(){
+    const frac=this._marks()[this._book&&this._book.name]||0;
+    setTimeout(()=>{
+      const b=document.getElementById("stage-body");
+      if(!b)return;
+      b.scrollTop=frac*Math.max(0,b.scrollHeight-b.clientHeight);
+    },30);
+  },
+  _page(dir){
+    const b=document.getElementById("stage-body");
+    if(!b)return false;
+    const max=Math.max(0,b.scrollHeight-b.clientHeight);
+    /* A page is not a screenful: two lines of overlap keep the sentence
+       you were mid-way through on screen, which is what stops a page turn
+       losing your place. */
+    const step=Math.max(40,b.clientHeight-48);
+    const was=b.scrollTop;
+    b.scrollTop=Math.max(0,Math.min(max,was+dir*step));
+    if(this._book)this._mark(this._book.name,max?b.scrollTop/max:0);
+    try{renderCard(this)}catch(e){}
+    return b.scrollTop!==was;
+  },
+
+  onKey(ctx,k){
+    if(this._level==="page"){
+      if(k==="down")return this._page(1)||true;
+      if(k==="up")return this._page(-1)||true;
+      return false;                       /* OK and BACK fall through */
+    }
+    const books=this._books();
+    if(k==="down"&&this.sel<books.length-1){this.sel++;ctx.rerender();
+      return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"&&books[this.sel]){this._open(ctx,books[this.sel]);
+      return true}
+    return false;
+  },
+  onBack(ctx){
+    if(this._level==="page"){
+      this._level="shelf";this._text="";this._book=null;this._note="";
+      ctx.rerender();return true;
+    }
+    return false;
+  },
+  onPick(ctx,i){
+    if(this._level!=="page"){this.sel=i;
+      const b=this._books()[i]; if(b)this._open(ctx,b);}
+  },
+
+  render(ctx){
+    if(!hostBridge)
+      return "<div class='state'>A library needs the AMBIENT app — a web "+
+        "page has no filesystem to read.</div>";
+    if(!hostBridge.listBooks)
+      return "<div class='state'>This build of the app has no book bridge "+
+        "yet — reinstall the APK.</div>";
+
+    if(this._level==="page"&&this._text){
+      const b=document.getElementById("stage-body");
+      const max=b?Math.max(0,b.scrollHeight-b.clientHeight):0;
+      const pct=b&&max?Math.round(100*b.scrollTop/max):0;
+      return "<div class='lbl' style='font-size:12px;margin-bottom:8px'>"+
+        esc(this._book.name.replace(/\.[a-z0-9]+$/i,""))+" · "+pct+"%</div>"+
+        /* pre-wrap keeps the blank lines a plain text file uses as its only
+           paragraph mark, without turning every wrapped line into one */
+        "<div style='white-space:pre-wrap;line-height:1.6;font-size:15px'>"+
+        esc(this._text)+"</div>";
+    }
+
+    const books=this._books();
+    const rows=books.map((bk,i)=>{
+      const on=(i===this.sel),p=this._pct(bk.name);
+      return "<div class='row"+(on?" hl sel":"")+"' data-row='"+i+"'>"+
+        "<span class='"+(on?"":"lbl")+"'>"+
+        esc(bk.name.replace(/\.[a-z0-9]+$/i,""))+"</span>"+
+        "<span class='lbl' style='font-size:12px'>"+bk.kind+" · "+
+        this._kb(bk.bytes)+(p?" · "+p+"%":"")+"</span></div>";
+    }).join("");
+    return (this._busy?"<div class='state'>opening…</div>"
+      :rows||"<div class='state'>No books yet. Copy .txt, .epub or .pdf "+
+       "files into <span class='val'>AMBIENT/books</span> on the device — "+
+       "internal storage, not the card.</div>")+
+      (this._note?"<div class='state' style='margin-top:6px;"+
+        "color:var(--accent)'>"+esc(this._note)+"</div>":"")+
+      "<div class='state' style='margin-top:10px'>▲▼ choose · OK open "+
+      "· BACK to tiles<br>reading: ▲▼ turn the page, BACK to the shelf; "+
+      "your place is kept per book</div>";
+  },
+
+  renderCompact(ctx){
+    if(!hostBridge||!hostBridge.listBooks)return face("—","app only");
+    if(this._level==="page"&&this._book)
+      return face(this._pct(this._book.name)+"%","reading",
+        {sub:esc(this._book.name.replace(/\.[a-z0-9]+$/i,"").slice(0,20))});
+    const n=this._books().length;
+    if(!n)return face("—","no books yet");
+    return face(n,n===1?"book":"books",{sub:"AMBIENT/books"});
+  }
+};
+
 const cardVideo={
   id:"video",title:"VIDEO",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
@@ -4951,7 +5111,8 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardMusic,cardPodcasts,cardVideo,cardTV,cardTale,cardVis,
+  cardRadio,cardMusic,cardPodcasts,cardVideo,cardTV,cardRead,cardTale,
+  cardVis,
   cardLaunch,
   cardScenes,
   cardDisplay,

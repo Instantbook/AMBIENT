@@ -420,6 +420,203 @@ public class MainActivity extends Activity {
             }
         }
 
+        /* ---- books ----
+         * AMBIENT/books on INTERNAL storage. Not the microSD: an ordinary
+         * app cannot read a removable volume at all, which is the same
+         * wall MUSIC hit and why it goes through MediaStore instead.
+         */
+        private File booksDir() {
+            return new File(Environment.getExternalStorageDirectory(),
+                    "AMBIENT/books");
+        }
+
+        @JavascriptInterface
+        public String listBooks() {
+            if (!atAmbient) return "[]";
+            StringBuilder b = new StringBuilder("[");
+            try {
+                File[] fs = booksDir().listFiles();
+                boolean first = true;
+                if (fs != null) for (File f : fs) {
+                    String n = f.getName(), l = n.toLowerCase();
+                    String kind = l.endsWith(".txt") || l.endsWith(".md")
+                            ? "text"
+                            : l.endsWith(".epub") ? "epub"
+                            : l.endsWith(".pdf") ? "pdf" : null;
+                    if (kind == null) continue;
+                    if (!first) b.append(",");
+                    first = false;
+                    b.append("{\"name\":\"").append(jesc(n))
+                     .append("\",\"kind\":\"").append(kind)
+                     .append("\",\"bytes\":").append(f.length()).append("}");
+                }
+            } catch (Throwable t) { /* no folder yet is not an error */ }
+            return b.append("]").toString();
+        }
+
+        /** A bare filename inside that one directory - never a path. */
+        private File bookFile(String name) {
+            if (name == null || name.isEmpty()) return null;
+            if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0
+                    || name.contains("..")) return null;
+            File f = new File(booksDir(), name);
+            return f.isFile() ? f : null;
+        }
+
+        /**
+         * The whole book as plain text.
+         *
+         * .txt is read as-is. .epub is a ZIP of XHTML, so it is unzipped
+         * here with java.util.zip - no dependency, which matters in a
+         * project with no build system - the spine read out of the OPF so
+         * the chapters arrive in the author's order rather than the zip's,
+         * and the markup flattened. Doing this in Java rather than the page
+         * keeps a 350KB archive off the JS bridge.
+         */
+        @JavascriptInterface
+        public String readBook(String name) {
+            if (!atAmbient) return "";
+            File f = bookFile(name);
+            if (f == null || f.length() > 8000000) return "";
+            String low = name.toLowerCase();
+            try {
+                if (low.endsWith(".txt") || low.endsWith(".md"))
+                    return readAll(new java.io.FileInputStream(f),
+                                   (int) f.length());
+                if (low.endsWith(".epub")) return epubText(f);
+            } catch (Throwable t) { /* fall through to empty */ }
+            return "";
+        }
+
+        private String readAll(java.io.InputStream in, int hint)
+                throws java.io.IOException {
+            try {
+                java.io.ByteArrayOutputStream bo =
+                        new java.io.ByteArrayOutputStream(
+                                Math.max(1024, hint));
+                byte[] buf = new byte[65536];
+                int r;
+                while ((r = in.read(buf)) > 0) bo.write(buf, 0, r);
+                return new String(bo.toByteArray(), "UTF-8");
+            } finally {
+                try { in.close(); } catch (Throwable ig) {}
+            }
+        }
+
+        private String epubText(File f) {
+            java.util.zip.ZipFile z = null;
+            try {
+                z = new java.util.zip.ZipFile(f);
+                /* container.xml names the OPF; the OPF names the order */
+                String opf = null;
+                java.util.zip.ZipEntry ce =
+                        z.getEntry("META-INF/container.xml");
+                if (ce != null) {
+                    String c = readAll(z.getInputStream(ce), 512);
+                    java.util.regex.Matcher m = java.util.regex.Pattern
+                            .compile("full-path=\"([^\"]+)\"").matcher(c);
+                    if (m.find()) opf = m.group(1);
+                }
+                if (opf == null) return "";
+                String base = opf.contains("/")
+                        ? opf.substring(0, opf.lastIndexOf('/') + 1) : "";
+                String x = readAll(z.getInputStream(z.getEntry(opf)), 4096);
+
+                java.util.HashMap<String, String> href =
+                        new java.util.HashMap<String, String>();
+                java.util.regex.Matcher im = java.util.regex.Pattern.compile(
+                        "<item\\b[^>]*>").matcher(x);
+                while (im.find()) {
+                    String tag = im.group();
+                    String id = attr(tag, "id"), hr = attr(tag, "href");
+                    if (id != null && hr != null) href.put(id, hr);
+                }
+                StringBuilder out = new StringBuilder();
+                java.util.regex.Matcher sm = java.util.regex.Pattern.compile(
+                        "<itemref\\b[^>]*>").matcher(x);
+                while (sm.find() && out.length() < 4000000) {
+                    String id = attr(sm.group(), "idref");
+                    if (id == null) continue;
+                    String hr = href.get(id);
+                    if (hr == null) continue;
+                    java.util.zip.ZipEntry e = z.getEntry(base + hr);
+                    if (e == null) e = z.getEntry(hr);
+                    if (e == null) continue;
+                    out.append(flatten(readAll(z.getInputStream(e),
+                            (int) e.getSize()))).append("\n\n");
+                }
+                return out.toString();
+            } catch (Throwable t) {
+                return "";
+            } finally {
+                try { if (z != null) z.close(); } catch (Throwable ig) {}
+            }
+        }
+
+        private String attr(String tag, String key) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile(key + "=\"([^\"]*)\"").matcher(tag);
+            return m.find() ? m.group(1) : null;
+        }
+
+        /** XHTML to readable text: block tags become breaks, the rest go. */
+        private String flatten(String h) {
+            String t = h;
+            t = t.replaceAll("(?is)<(script|style|head)[^>]*>.*?</\\1>", " ");
+            t = t.replaceAll("(?i)<(br|/p|/div|/h[1-6]|/li|/tr)[^>]*>",
+                             "\n");
+            t = t.replaceAll("(?i)<(p|div|h[1-6]|li|tr)\\b[^>]*>", "\n");
+            t = t.replaceAll("<[^>]*>", "");
+            t = t.replace("&nbsp;", " ").replace("&mdash;", "—")
+                 .replace("&ndash;", "–").replace("&hellip;", "…")
+                 .replace("&lsquo;", "‘").replace("&rsquo;", "’")
+                 .replace("&ldquo;", "“").replace("&rdquo;", "”")
+                 .replace("&quot;", "\"").replace("&#39;", "'")
+                 .replace("&lt;", "<").replace("&gt;", ">")
+                 .replace("&amp;", "&");
+            t = t.replaceAll("[ \\t]+", " ");
+            t = t.replaceAll("\n[ \\t]+", "\n");
+            t = t.replaceAll("\n{3,}", "\n\n");
+            return t.trim();
+        }
+
+        /**
+         * A PDF goes to whatever can render one.
+         *
+         * A file:// URI in an Intent throws FileUriExposedException on
+         * anything since API 24, and this project has no androidx, so
+         * there is no FileProvider to lean on. MediaStore already indexes
+         * the file and will hand back a content:// URI for it, which is
+         * the same mechanism the music player already streams through.
+         */
+        @JavascriptInterface
+        public boolean openBook(String name) {
+            if (!atAmbient) return false;
+            File f = bookFile(name);
+            if (f == null) return false;
+            Cursor c = null;
+            try {
+                Uri table = MediaStore.Files.getContentUri("external");
+                c = getContentResolver().query(table,
+                        new String[]{MediaStore.Files.FileColumns._ID},
+                        MediaStore.Files.FileColumns.DATA + "=?",
+                        new String[]{f.getAbsolutePath()}, null);
+                if (c == null || !c.moveToFirst()) return false;
+                Uri item = ContentUris.withAppendedId(table, c.getLong(0));
+                android.content.Intent i = new android.content.Intent(
+                        android.content.Intent.ACTION_VIEW);
+                i.setDataAndType(item, "application/pdf");
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        | android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(i);
+                return true;
+            } catch (Throwable t) {
+                return false;
+            } finally {
+                try { if (c != null) c.close(); } catch (Throwable ig) {}
+            }
+        }
+
         @JavascriptInterface
         public String mediaBase() { return atAmbient ? MEDIA_HOST : ""; }
 
