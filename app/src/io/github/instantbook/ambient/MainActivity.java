@@ -580,6 +580,122 @@ public class MainActivity extends Activity {
             return t.trim();
         }
 
+        /* The spine, cached: a page turn must not re-parse the OPF of a
+           1834-entry archive every time. Keyed on name and length, so a
+           replaced file is re-read rather than served stale. */
+        private String spineKey = null;
+        private java.util.ArrayList<String> spineList = null;
+
+        private java.util.ArrayList<String> epubSpine(File f) {
+            String key = f.getName() + ":" + f.length();
+            if (key.equals(spineKey) && spineList != null) return spineList;
+            java.util.ArrayList<String> out =
+                    new java.util.ArrayList<String>();
+            java.util.zip.ZipFile z = null;
+            try {
+                z = new java.util.zip.ZipFile(f);
+                String opf = null;
+                java.util.zip.ZipEntry ce =
+                        z.getEntry("META-INF/container.xml");
+                if (ce != null) {
+                    String c = readAll(z.getInputStream(ce), 512);
+                    java.util.regex.Matcher m = java.util.regex.Pattern
+                            .compile("full-path=\"([^\"]+)\"").matcher(c);
+                    if (m.find()) opf = m.group(1);
+                }
+                if (opf == null) return out;
+                String base = opf.contains("/")
+                        ? opf.substring(0, opf.lastIndexOf('/') + 1) : "";
+                String x = readAll(z.getInputStream(z.getEntry(opf)), 65536);
+                java.util.HashMap<String, String> href =
+                        new java.util.HashMap<String, String>();
+                java.util.regex.Matcher im = java.util.regex.Pattern
+                        .compile("<item\\b[^>]*>").matcher(x);
+                while (im.find()) {
+                    String tag = im.group();
+                    String id = attr(tag, "id"), hr = attr(tag, "href");
+                    if (id != null && hr != null) href.put(id, hr);
+                }
+                java.util.regex.Matcher sm = java.util.regex.Pattern
+                        .compile("<itemref\\b[^>]*>").matcher(x);
+                while (sm.find()) {
+                    String id = attr(sm.group(), "idref");
+                    if (id == null) continue;
+                    String hr = href.get(id);
+                    if (hr == null) continue;
+                    if (z.getEntry(base + hr) != null) out.add(base + hr);
+                    else if (z.getEntry(hr) != null) out.add(hr);
+                }
+            } catch (Throwable t) { /* unreadable archive: no pages */ }
+            finally { try { if (z != null) z.close(); } catch (Throwable ig) {} }
+            spineKey = key; spineList = out;
+            return out;
+        }
+
+        /** Characters per page when the book has no pages of its own. */
+        private static final int TXT_PAGE = 2600;
+
+        /** {"n":pages,"kind":...} - how many pages this book has. */
+        @JavascriptInterface
+        public String bookPages(String name) {
+            if (!atAmbient) return "{}";
+            File f = bookFile(name);
+            if (f == null) return "{}";
+            String low = name.toLowerCase();
+            try {
+                if (low.endsWith(".epub"))
+                    return "{\"n\":" + epubSpine(f).size()
+                         + ",\"kind\":\"epub\"}";
+                if (low.endsWith(".txt") || low.endsWith(".md")) {
+                    int len = readAll(new java.io.FileInputStream(f),
+                            (int) f.length()).length();
+                    int n = Math.max(1, (len + TXT_PAGE - 1) / TXT_PAGE);
+                    return "{\"n\":" + n + ",\"kind\":\"text\"}";
+                }
+            } catch (Throwable t) { /* fall through */ }
+            return "{}";
+        }
+
+        /** One page. Milliseconds, whatever the size of the book. */
+        @JavascriptInterface
+        public String readPage(String name, int idx) {
+            if (!atAmbient || idx < 0) return "";
+            File f = bookFile(name);
+            if (f == null) return "";
+            String low = name.toLowerCase();
+            try {
+                if (low.endsWith(".epub")) {
+                    java.util.ArrayList<String> sp = epubSpine(f);
+                    if (idx >= sp.size()) return "";
+                    java.util.zip.ZipFile z = null;
+                    try {
+                        z = new java.util.zip.ZipFile(f);
+                        java.util.zip.ZipEntry e = z.getEntry(sp.get(idx));
+                        if (e == null) return "";
+                        return flatten(readAll(z.getInputStream(e),
+                                (int) e.getSize()));
+                    } finally {
+                        try { if (z != null) z.close(); }
+                        catch (Throwable ig) {}
+                    }
+                }
+                if (low.endsWith(".txt") || low.endsWith(".md")) {
+                    String t = readAll(new java.io.FileInputStream(f),
+                            (int) f.length());
+                    int from = idx * TXT_PAGE;
+                    if (from >= t.length()) return "";
+                    int to = Math.min(t.length(), from + TXT_PAGE);
+                    /* Do not cut a word in half at the page break. */
+                    if (to < t.length()) {
+                        int sp2 = t.lastIndexOf(' ', to);
+                        if (sp2 > from + TXT_PAGE / 2) to = sp2;
+                    }
+                    return t.substring(from, to);
+                }
+            } catch (Throwable t) { /* unreadable: empty page */ }
+            return "";
+        }
+
         /**
          * A PDF goes to whatever can render one.
          *
