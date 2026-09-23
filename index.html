@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v101";
+const APP_VERSION="v102";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1479,6 +1479,10 @@ function route(k,held){
   if(k==="enter"){
     const c=selectedCard();
     if(!c)return;
+    /* The page turn is not a card and must be caught HERE: this handler
+       has its own open path below and never calls openCard(), so an
+       intercept there was never reached from the bezel. */
+    if(c.id==="more"){bezelTurn();return}
     /* OK on the card that is already loaded expands it instead of
        reloading it — that is the only route to fullscreen from the remote */
     const single=()=>{
@@ -4281,7 +4285,10 @@ const cardRead={
     this._text=t.trim()?t:"[this page is blank]";
     this._level="page";
     this._setLast(this._book.name,p);
-    ctx.rerender();
+    /* Reading is a fullscreen act. The windowed stage is six lines tall
+       with a bezel around it - fine for a list, useless for prose - so
+       opening a book takes the whole screen rather than offering to. */
+    if(mode!=="full"){mode="full";render()} else ctx.rerender();
     setTimeout(()=>{const b=document.getElementById("stage-body");
       if(b)b.scrollTop=0;},0);
   },
@@ -4409,9 +4416,7 @@ const cardRead={
         "<div style='white-space:pre-wrap;line-height:1.6;font-size:15px"+
         (pp[2]?";background:"+pp[2]+";color:"+pp[3]+
           ";margin:0 -10px;padding:12px 10px 16px;border-radius:3px":"")+
-        "'>"+esc(this._text)+"</div>"+
-        "<div class='state' style='margin-top:14px'>▲▼ turn the page · "+
-        "OK for controls · BACK to the shelf</div>";
+        "'>"+esc(this._text)+"</div>";
     }
     if(this._level==="goto")
       return "<div style='margin-bottom:12px'><div style='color:"+
@@ -4454,6 +4459,21 @@ const cardRead={
          "BACK to tiles<br>your place is kept per book</div>":"");
   },
 
+  /* Pinned under the text, not appended to it: a control bar that can
+     scroll out of sight is not a control bar. */
+  renderFooter(ctx){
+    if(this._level!=="page"||!this._book)return "";
+    const marked=this._bm(this._book.name).indexOf(this._p)>=0;
+    const pct=this._n?Math.round(100*(this._p+1)/this._n):0;
+    return "<div class='lbl' style='display:flex;justify-content:"+
+      "space-between;gap:12px;font-size:12px'>"+
+      "<span>"+(marked?"★ ":"")+"page "+(this._p+1)+" / "+this._n+
+      " · "+pct+"% · "+this._paper()[1].toLowerCase()+"</span>"+
+      "<span>▲▼ page · OK controls · BACK shelf</span></div>"+
+      "<div style='height:3px;background:var(--faint);border-radius:2px;"+
+      "overflow:hidden;margin-top:5px'><div style='height:100%;width:"+
+      pct+"%;background:var(--accent)'></div></div>";
+  },
   renderCompact(ctx){
     if(!hostBridge||!hostBridge.bookPages)return face("—","app only");
     if(this._book&&this._n)
