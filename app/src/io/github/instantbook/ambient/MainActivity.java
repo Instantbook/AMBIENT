@@ -362,6 +362,64 @@ public class MainActivity extends Activity {
             return false;
         }
 
+        /**
+         * Playlists the user has dropped in AMBIENT/docs.
+         *
+         * A curated channel list is worth more than the public index - it
+         * is the record of what actually works - but this repo is public,
+         * so it must not live in it. Internal storage keeps it private and
+         * keeps it readable with no network at all, which matters on a box
+         * that loses wifi.
+         */
+        @JavascriptInterface
+        public String listDocs() {
+            if (!atAmbient) return "[]";
+            StringBuilder b = new StringBuilder("[");
+            try {
+                File dir = new File(Environment.getExternalStorageDirectory(),
+                        "AMBIENT/docs");
+                File[] fs = dir.listFiles();
+                boolean first = true;
+                if (fs != null) for (File f : fs) {
+                    String n = f.getName().toLowerCase();
+                    if (!n.endsWith(".m3u") && !n.endsWith(".m3u8")) continue;
+                    if (!first) b.append(",");
+                    first = false;
+                    b.append("{\"name\":\"").append(jesc(f.getName()))
+                     .append("\",\"bytes\":").append(f.length()).append("}");
+                }
+            } catch (Throwable t) { /* no folder yet is not an error */ }
+            return b.append("]").toString();
+        }
+
+        /** One of those files, by bare name. */
+        @JavascriptInterface
+        public String readDoc(String name) {
+            if (!atAmbient || name == null || name.isEmpty()) return "";
+            /* A bare filename in one directory - never a path. Without this
+               the bridge would read anything on the device that the page
+               cared to ask for. */
+            if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0
+                    || name.contains("..")) return "";
+            java.io.FileInputStream in = null;
+            try {
+                File f = new File(new File(
+                        Environment.getExternalStorageDirectory(),
+                        "AMBIENT/docs"), name);
+                if (!f.isFile() || f.length() > 2000000) return "";
+                byte[] buf = new byte[(int) f.length()];
+                in = new java.io.FileInputStream(f);
+                int n = 0, r;
+                while (n < buf.length
+                        && (r = in.read(buf, n, buf.length - n)) > 0) n += r;
+                return new String(buf, 0, n, "UTF-8");
+            } catch (Throwable t) {
+                return "";
+            } finally {
+                try { if (in != null) in.close(); } catch (Throwable ig) {}
+            }
+        }
+
         @JavascriptInterface
         public String mediaBase() { return atAmbient ? MEDIA_HOST : ""; }
 
@@ -896,18 +954,30 @@ public class MainActivity extends Activity {
         "  if(h!==hov){if(hov)fire(hov,'mouseout',cx,cy);\n" +
         "    fire(h,'mouseover',cx,cy);hov=h;}\n" +
         "  fire(h,'mousemove',cx,cy);}\n" +
-        "function nudge(dir,fast){var step=fast?54:16,m=48;\n" +
-        "  if(dir==='left')cx-=step;else if(dir==='right')cx+=step;\n" +
-        "  else if(dir==='up')cy-=step;else cy+=step;\n" +
-        // Pushing against the top or bottom edge scrolls rather than
-        // stopping, so a long page stays reachable without leaving cursor
-        // mode to scroll and coming back.
-        "  if(cy<m){try{scrollBy(0,cy-m-step)}catch(_){}cy=m;}\n" +
-        "  if(cy>innerHeight-m){\n" +
-        "    try{scrollBy(0,cy-(innerHeight-m)+step)}catch(_){}\n" +
-        "    cy=innerHeight-m;}\n" +
-        "  cx=Math.max(2,Math.min(innerWidth-2,cx));\n" +
-        "  cy=Math.max(2,Math.min(innerHeight-2,cy));\n" +
+        "function canScroll(d){var e=document.documentElement;\n" +
+        "  var y=window.scrollY||e.scrollTop||0;\n" +
+        "  if(d<0)return y>1;\n" +
+        "  return y+innerHeight<(e.scrollHeight||0)-2;}\n" +
+        // The cursor has to reach EVERY pixel, a fixed menu bar along the
+        // top and a consent banner along the bottom included - those are
+        // the controls most likely to be pinned to an edge, and so the
+        // ones you most need to click. Reserving a margin there and
+        // scrolling instead put both permanently out of reach.
+        //
+        // Scrolling now happens only once the cursor is ALREADY at the
+        // edge with nowhere further to go, so a long page is still
+        // reachable without leaving the mode - the press that would have
+        // moved past the edge scrolls instead.
+        "function nudge(dir,fast){var step=fast?54:16;\n" +
+        "  if(dir==='left')cx=Math.max(2,cx-step);\n" +
+        "  else if(dir==='right')cx=Math.min(innerWidth-2,cx+step);\n" +
+        "  else if(dir==='up'){\n" +
+        "    if(cy>2)cy=Math.max(2,cy-step);\n" +
+        "    else if(canScroll(-1)){try{scrollBy(0,-step*3)}catch(_){}}\n" +
+        "  }else{\n" +
+        "    if(cy<innerHeight-2)cy=Math.min(innerHeight-2,cy+step);\n" +
+        "    else if(canScroll(1)){try{scrollBy(0,step*3)}catch(_){}}\n" +
+        "  }\n" +
         "  draw();hover();}\n" +
         // ---- timeline control ----
         // A player's scrub bar is a custom widget that wants a real drag:

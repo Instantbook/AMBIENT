@@ -1,5 +1,5 @@
 /* AMBIENT service worker — cache the shell, network-first for data */
-const CACHE="ambient-v96";
+const CACHE="ambient-v98";
 const SHELL=["./","./index.html","./companion.html","./manifest.json","./icon.png"];
 
 /* cache:"reload" is load-bearing, not a belt-and-braces flourish.

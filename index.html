@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v96";
+const APP_VERSION="v98";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -811,10 +811,58 @@ function visibleCards(){return CARDS.slice()}
    also the order ◄► walk, so screen position and key order always agree.
    "pinned" now means "fixed slot + immune to scene deactivation" — such a
    card can still be opened in the main window like any other. */
-function frameCards(){return pinnedCards().concat(ringCards())}
+/* ---- bezel pages ----
+   Eighteen slots and sixteen cards: the frame is full, and every new card
+   from here would have nowhere to go. One slot becomes a page turn, and
+   the rest of the ring paginates behind it - so the bezel stops being a
+   fixed budget and starts being the first page of one.
+
+   Pinned cards (the clock) hold their slot on EVERY page: a clock you have
+   to turn the page to see is not a clock. */
+let bezelPage=0;
+const cardMore={
+  id:"more",title:"MORE",icon:"layers",pane:"system",
+  renderCompact(){
+    const n=bezelPages();
+    return face((bezelPage+1)+"/"+n,"page",
+      {sub:n>1?"OK turns the page":"room to grow"});
+  },
+  render(){
+    return "<div class='state'>The bezel holds more cards than fit around "+
+      "one frame. OK on this tile turns to the next page; the clock stays "+
+      "on all of them.</div>";
+  }
+};
+function bezelPerPage(){
+  /* minus the pinned cards, which repeat, and minus this tile itself */
+  return Math.max(1,frameGeom().total-pinnedCards().length-1);
+}
+function bezelPages(){
+  /* Always at least two. The point of the toggle is somewhere to put the
+     next card, and a page that does not exist yet cannot be grown into. */
+  return Math.max(2,Math.ceil(ringCards().length/bezelPerPage()));
+}
+function frameCards(){
+  const per=bezelPerPage(),ring=ringCards();
+  const pages=bezelPages();
+  if(bezelPage>=pages)bezelPage=0;
+  return pinnedCards()
+    .concat(ring.slice(bezelPage*per,bezelPage*per+per))
+    .concat([cardMore]);
+}
+function bezelTurn(){
+  bezelPage=(bezelPage+1)%bezelPages();
+  /* the highlight has to land somewhere that exists on the new page */
+  selIdx=Math.min(selIdx,frameCards().length-1);
+  render();
+}
 function staged(){
+  /* Searched across ALL cards, not just the visible page: turning the page
+     must not change what the main window is showing. */
+  const hit=CARDS.find(c=>c.id===stageId);
+  if(hit)return hit;
   const all=frameCards();
-  return all.find(c=>c.id===stageId)||all[0]||CARDS[0];
+  return all[0]||CARDS[0];
 }
 function selectedCard(){return frameCards()[selIdx]}
 function stagedIs(card){const s=staged();return !!s&&s.id===card.id}
@@ -1268,6 +1316,8 @@ document.addEventListener("focusin",e=>{
 });
 function openCard(c){
   if(!c)return;
+  /* Not a card you open - a control that lives in a card's slot. */
+  if(c.id==="more"){bezelTurn();return}
   if(c._active===false)c._active=true;
   /* A card that browses a long list opens straight to fullscreen. The
      windowed stage is 187px tall on this device — four rows — which is
@@ -3931,6 +3981,42 @@ const cardTV={
     ctx.storage.set("favs",f);
     ctx.rerender();
   },
+  /* Same shape the Worker returns for a country, parsed here instead -
+     the file is already local, so a round trip would only add a way to
+     fail. */
+  _parseM3U(text){
+    const lines=String(text||"").split(/\r?\n/),out=[];
+    for(let i=0;i<lines.length;i++){
+      const L=lines[i];
+      if(L.indexOf("#EXTINF")!==0)continue;
+      let u="";
+      for(let j=i+1;j<lines.length;j++){
+        const n=lines[j].trim();
+        if(!n||n.charAt(0)==="#")continue;
+        u=n;break;
+      }
+      if(!u)continue;
+      const nm=L.slice(L.indexOf(",")+1).trim();
+      if(!nm)continue;
+      out.push({name:nm.slice(0,44),
+        cat:((/group-title="([^"]*)"/.exec(L)||[])[1]||"").slice(0,24),
+        url:u,q:"",s:u.indexOf("https://")===0,part:false});
+    }
+    out.sort((a,b)=>a.name.localeCompare(b.name));
+    return out;
+  },
+  _docs(){
+    try{return JSON.parse(hostBridge.listDocs()||"[]")}catch(e){return []}
+  },
+  _openLocal(ctx,name){
+    this._cc=null;this._doc=name;this._level="channels";this.sel=0;
+    this._filter="";this._note="";this._busy=false;
+    let txt="";
+    try{txt=hostBridge.readDoc(name)||""}catch(e){}
+    this._list=this._parseM3U(txt);
+    if(!this._list.length)this._note="nothing readable in "+name;
+    ctx.rerender();
+  },
   _open(ctx,cc){
     this._cc=cc;this._level="channels";this.sel=0;this._filter="";
     this._list=null;this._busy=true;this._note="";ctx.rerender();
@@ -3979,6 +4065,11 @@ const cardTV={
     const favs=this._favs();
     favs.forEach(f=>rows.push({ch:f,fav:true,label:"★ "+f.name,
       meta:[f.cc?f.cc.toUpperCase():"",f.cat,f.q].filter(Boolean).join(" · ")}));
+    /* A hand-curated list outranks the public index, because somebody
+       already checked which of these actually answer. */
+    this._docs().forEach(d=>rows.push({doc:d.name,
+      label:d.name.replace(/\.m3u8?$/i,"").replace(/[_-]+/g," ").toUpperCase(),
+      meta:"my list"}));
     this.COUNTRIES.forEach(([cc,name])=>rows.push({cc,label:name,meta:cc}));
     return rows;
   },
@@ -3986,6 +4077,7 @@ const cardTV={
   _enter(ctx){
     const r=this._rows()[this.sel];
     if(!r||this._busy)return;
+    if(r.doc){this._openLocal(ctx,r.doc);return}
     if(r.cc&&!r.ch){this._open(ctx,r.cc);return}
     if(r.ch){this._play(ctx,r.ch);return}
   },
@@ -4011,6 +4103,7 @@ const cardTV={
   onBack(ctx){
     if(this._level==="channels"){
       this._level="home";this.sel=0;this._note="";this._filter="";
+      this._doc=null;
       ctx.rerender();return true;
     }
     return false;
@@ -4034,8 +4127,10 @@ const cardTV={
     }).join("");
     const head=this._level==="channels"
       ?"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
-       "font-size:15px'>"+esc((this.COUNTRIES.find(c=>c[0]===this._cc)||
-         [,this._cc||""])[1])+"</div><div class='lbl'>"+
+       "font-size:15px'>"+esc(this._doc
+         ?this._doc.replace(/\.m3u8?$/i,"").replace(/[_-]+/g," ").toUpperCase()
+         :(this.COUNTRIES.find(c=>c[0]===this._cc)||
+           [,this._cc||""])[1])+"</div><div class='lbl'>"+
        ((this._list||[]).length)+" channels"+
        (this._filter?" · filtered by “"+esc(this._filter)+"”":"")+
        "</div></div>"
