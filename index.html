@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v102";
+const APP_VERSION="v103";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4198,6 +4198,7 @@ const cardRead={
   selAnchor:"nearest",
   pane:"web",size:"large",order:57,refresh:null,offline:"local-first",
   sel:0,_level:"shelf",_book:null,_kind:"",_n:0,_p:0,_text:"",
+  _img:false,_zoom:100,
   _note:"",_busy:false,_ctx:null,
 
   init(ctx){
@@ -4254,19 +4255,56 @@ const cardRead={
     this._level="page";ctx.rerender();
   },
 
+  /* Paragraphs, from what the text actually contains.
+
+     A .txt wraps its lines, so a single newline is a wrap and a BLANK
+     line is the paragraph break. A flattened EPUB has already turned each
+     block tag into one newline, so there every newline is a break. Using
+     one rule for both turned a hard-wrapped text file into one paragraph
+     per line. */
+  _paras(t){
+    if(this._kind==="text")
+      return t.split(/\n[ \t]*\n+/).map(x=>x.replace(/\s*\n\s*/g," "));
+    return t.split(/\n+/);
+  },
+  /* 1256 of 1258 speaker labels in the Cooper Plato are NAME: in capitals
+     and they are the only structure its one-<p>-per-page markup leaves
+     behind. OCR clips some of them (RATES for SOCRATES), which {3,} still
+     catches. Nothing else is split on: a sentence end is not a paragraph,
+     and guessing there would invent structure the book does not have. */
+  _fmt(t){
+    const out=[];
+    this._paras(t).forEach(p=>{
+      p.replace(/([^\n])\s+(?=[A-Z]{3,}\s*:)/g,"$1\n").split("\n")
+        .forEach(s=>{
+          s=s.trim(); if(!s)return;
+          const m=s.match(/^([A-Z]{3,})\s*:\s*([\s\S]*)$/);
+          out.push(m
+            ?"<p style='margin:0 0 .6em;padding-left:1.5em;"+
+             "text-indent:-1.5em'><b>"+esc(m[1])+"</b>  "+esc(m[2])+"</p>"
+            :"<p style='margin:0 0 .75em'>"+esc(s)+"</p>");
+        });
+    });
+    return out.join("")||"<p>[this page is blank]</p>";
+  },
+
   _open(ctx,b){
-    if(b.kind==="pdf"){
-      let ok=false;
-      try{ok=hostBridge.openBook(b.name)}catch(e){}
-      this._note=ok?"opened in the device's PDF viewer"
-        :"no PDF viewer answered";
-      ctx.rerender();return;
-    }
     this._busy=true;this._note="";ctx.rerender();
     setTimeout(()=>{
       let info={};
       try{info=JSON.parse(hostBridge.bookPages(b.name)||"{}")}catch(e){}
       this._busy=false;
+      /* A PDF is rendered here now, page by page. Handing it out was
+         never going to work: this device has no PDF viewer installed at
+         all. The hand-off survives only for a file this build cannot
+         rasterise, and says so plainly when nothing answers. */
+      if(!info.n&&b.kind==="pdf"){
+        let ok=false;
+        try{ok=hostBridge.openBook&&hostBridge.openBook(b.name)}catch(e){}
+        this._note=ok?"opened in an external viewer"
+          :"this PDF could not be rendered, and no viewer answered";
+        ctx.rerender();return;
+      }
       if(!info.n){this._note="nothing readable in "+b.name;
         ctx.rerender();return}
       this._book=b;this._kind=info.kind||"";this._n=info.n;
@@ -4282,7 +4320,11 @@ const cardRead={
     try{t=hostBridge.readPage(this._book.name,p)||""}catch(e){}
     /* A scanned page can be blank; say so rather than showing nothing and
        letting it read as a failure. */
-    this._text=t.trim()?t:"[this page is blank]";
+    /* A rasterised PDF page comes back as IMG:<data uri> rather than
+       words - PdfRenderer renders, it does not extract text. */
+    this._img=t.indexOf("IMG:")===0;
+    this._text=this._img?t.slice(4)
+      :(t.trim()?t:"[this page is blank]");
     this._level="page";
     this._setLast(this._book.name,p);
     /* Reading is a fullscreen act. The windowed stage is six lines tall
@@ -4331,6 +4373,9 @@ const cardRead={
        meta:"page "+(this._p+1)},
       {act:"goto",label:"GO TO PAGE…",meta:"1 – "+this._n},
       {act:"paper",label:"PAGE COLOUR",meta:this._paper()[1].toLowerCase()},
+      /* A rendered page cannot reflow, so the only way to read small
+         print on it is to make it bigger and scroll. */
+      ...(this._img?[{act:"zoom",label:"ZOOM",meta:this._zoom+"%"}]:[]),
       {act:"marks",label:"BOOKMARKS",
        meta:this._bm(this._book.name).length+" saved"},
       {act:"shelf",label:"BACK TO THE SHELF",meta:""},
@@ -4356,8 +4401,14 @@ const cardRead={
     if(r.act==="paper"){this._nextPaper(ctx);return}
     if(r.act==="goto"){this._level="goto";ctx.rerender();return}
     if(r.act==="marks"){this._level="marks";this.sel=0;ctx.rerender();return}
+    if(r.act==="zoom"){
+      const z=[100,150,200,300];
+      this._zoom=z[(z.indexOf(this._zoom)+1)%z.length];
+      this._note="zoom "+this._zoom+"%";
+      this._level="page";ctx.rerender();return;
+    }
     if(r.act==="shelf"){this._level="shelf";this.sel=0;this._book=null;
-      this._text="";ctx.rerender();return}
+      this._text="";this._img=false;ctx.rerender();return}
   },
   onKey(ctx,k){
     if(this._level==="page"){
@@ -4412,11 +4463,21 @@ const cardRead={
         esc(this._book.name.replace(/\.[a-z0-9]+$/i,"").slice(0,34))+
         " · page "+(this._p+1)+" / "+this._n+"</div>"+
         /* The sheet spans the reading area and is padded, so a light
-           page reads as paper rather than as a pasted rectangle. */
-        "<div style='white-space:pre-wrap;line-height:1.6;font-size:15px"+
+           page reads as paper rather than as a pasted rectangle. A 960px
+           line of 15px text runs to ~110 characters, about double a
+           readable measure - so the column is capped and centred, which
+           is half of why the page used to read as a wall. */
+        "<div style='line-height:1.62;font-size:15px;max-width:34em;"+
+        "margin:0 auto"+
         (pp[2]?";background:"+pp[2]+";color:"+pp[3]+
-          ";margin:0 -10px;padding:12px 10px 16px;border-radius:3px":"")+
-        "'>"+esc(this._text)+"</div>";
+          ";padding:12px 14px 16px;border-radius:3px":"")+
+        "'>"+
+        (this._img
+          ?"<img src='"+this._text+"' alt='page "+(this._p+1)+"' "+
+           "style='display:block;width:"+this._zoom+"%;max-width:none;"+
+           "border-radius:2px'>"
+          :this._fmt(this._text))+
+        "</div>";
     }
     if(this._level==="goto")
       return "<div style='margin-bottom:12px'><div style='color:"+

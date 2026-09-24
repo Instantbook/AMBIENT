@@ -566,6 +566,12 @@ public class MainActivity extends Activity {
             t = t.replaceAll("(?i)<(br|/p|/div|/h[1-6]|/li|/tr)[^>]*>",
                              "\n");
             t = t.replaceAll("(?i)<(p|div|h[1-6]|li|tr)\\b[^>]*>", "\n");
+            /* A cell end is a GAP, not a line break: rows already break on
+               </tr>, and breaking on </td> too would split a two-column
+               contents table into alternating numerals and titles. Without
+               this a row welded together as "IVenice in Venice", which is
+               what "just numbers and roman numerals" actually was. */
+            t = t.replaceAll("(?i)</t[dh]>", " ");
             t = t.replaceAll("<[^>]*>", "");
             t = t.replace("&nbsp;", " ").replace("&mdash;", "—")
                  .replace("&ndash;", "–").replace("&hellip;", "…")
@@ -632,6 +638,78 @@ public class MainActivity extends Activity {
             return out;
         }
 
+        /* ---- PDF ----
+         * There is no PDF viewer installed on this device at all, so the
+         * hand-off could never have worked. PdfRenderer is part of the
+         * framework: no dependency, and it works a page at a time, which
+         * is the unit this reader already uses. It rasterises rather than
+         * extracting text, so a page arrives as an image.
+         *
+         * The renderer is cached like the EPUB spine - reopening a file
+         * descriptor per page turn would be the same mistake.
+         */
+        private String pdfKey = null;
+        private android.graphics.pdf.PdfRenderer pdfR = null;
+        private android.os.ParcelFileDescriptor pdfFd = null;
+
+        private void closePdf() {
+            try { if (pdfR != null) pdfR.close(); } catch (Throwable ig) {}
+            try { if (pdfFd != null) pdfFd.close(); } catch (Throwable ig) {}
+            pdfR = null; pdfFd = null; pdfKey = null;
+        }
+
+        private android.graphics.pdf.PdfRenderer pdf(File f) {
+            String key = f.getName() + ":" + f.length();
+            if (key.equals(pdfKey) && pdfR != null) return pdfR;
+            closePdf();
+            try {
+                pdfFd = android.os.ParcelFileDescriptor.open(f,
+                        android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+                pdfR = new android.graphics.pdf.PdfRenderer(pdfFd);
+                pdfKey = key;
+            } catch (Throwable t) { closePdf(); }
+            return pdfR;
+        }
+
+        /* Rasterise at 1200px wide. The CSS viewport is 960, so a page is
+           still slightly larger than life and stays legible when the page
+           is scrolled rather than shrunk to fit six lines of screen. */
+        private static final int PDF_W = 1200;
+
+        private String pdfPage(File f, int idx) {
+            android.graphics.pdf.PdfRenderer r = pdf(f);
+            if (r == null || idx >= r.getPageCount()) return "";
+            android.graphics.pdf.PdfRenderer.Page p = null;
+            try {
+                p = r.openPage(idx);
+                int w = PDF_W;
+                int h = Math.max(1, (int) ((long) w * p.getHeight()
+                        / Math.max(1, p.getWidth())));
+                android.graphics.Bitmap bm =
+                        android.graphics.Bitmap.createBitmap(w, h,
+                                android.graphics.Bitmap.Config.ARGB_8888);
+                /* PdfRenderer draws ink only. An unfilled bitmap leaves the
+                   paper transparent, which reads as a black page. */
+                bm.eraseColor(0xFFFFFFFF);
+                p.render(bm, null, null, android.graphics.pdf.PdfRenderer
+                        .Page.RENDER_MODE_FOR_DISPLAY);
+                java.io.ByteArrayOutputStream bo =
+                        new java.io.ByteArrayOutputStream(131072);
+                /* PNG, not JPEG: a page of text is mostly flat white, which
+                   PNG compresses well and does not ring around the glyphs. */
+                bm.compress(android.graphics.Bitmap.CompressFormat.PNG, 100,
+                        bo);
+                bm.recycle();
+                return "IMG:data:image/png;base64,"
+                        + android.util.Base64.encodeToString(bo.toByteArray(),
+                                android.util.Base64.NO_WRAP);
+            } catch (Throwable t) {
+                return "";
+            } finally {
+                try { if (p != null) p.close(); } catch (Throwable ig) {}
+            }
+        }
+
         /** Characters per page when the book has no pages of its own. */
         private static final int TXT_PAGE = 2600;
 
@@ -646,6 +724,12 @@ public class MainActivity extends Activity {
                 if (low.endsWith(".epub"))
                     return "{\"n\":" + epubSpine(f).size()
                          + ",\"kind\":\"epub\"}";
+                if (low.endsWith(".pdf")) {
+                    android.graphics.pdf.PdfRenderer r = pdf(f);
+                    if (r != null)
+                        return "{\"n\":" + r.getPageCount()
+                             + ",\"kind\":\"pdf\"}";
+                }
                 if (low.endsWith(".txt") || low.endsWith(".md")) {
                     int len = readAll(new java.io.FileInputStream(f),
                             (int) f.length()).length();
@@ -664,6 +748,7 @@ public class MainActivity extends Activity {
             if (f == null) return "";
             String low = name.toLowerCase();
             try {
+                if (low.endsWith(".pdf")) return pdfPage(f, idx);
                 if (low.endsWith(".epub")) {
                     java.util.ArrayList<String> sp = epubSpine(f);
                     if (idx >= sp.size()) return "";
