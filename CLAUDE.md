@@ -39,7 +39,13 @@ reinstalling (signature mismatch), which also wipes its localStorage.
 
 Untracked local-only files, ignored via `.git/info/exclude` (which is local to `.git/` and never pushed):
 `info.md` (a pasted transcript of the claude.ai session that designed v11 — historical context, not
-documentation), `extracted/` (a scratch unzip of `ambient-v11.zip`), and this `CLAUDE.md`.
+documentation), `extracted/` (a scratch unzip of `ambient-v11.zip`), `docs/` (live TV stream URLs) and
+`books/`. The last two are excluded because **the repo is public and every commit here runs `git add -A`**
+— anything dropped in the working tree is published unless it is listed there first.
+
+**`CLAUDE.md` itself is tracked and public**, despite an earlier version of this paragraph claiming
+otherwise. Nothing secret has gone into it (the Worker URL is not a credential — `ALLOW_ORIGIN` is the
+actual lock), but write it as a public file, because it is one.
 
 ### The Cloudflare Worker
 
@@ -424,6 +430,57 @@ try to detect it from the tags: the Greek titles were **romanised to Latin scrip
 earlier pass, so they read as English to any test of the text. A Greek-script check
 survives only as a fallback for anything filed outside that folder, and the card shows
 "app update needed" when `path` is absent rather than under-counting silently.
+
+### The reader, and reading the source file before blaming the renderer
+
+LIBRARY reads `AMBIENT/books` on **internal** storage (the removable-volume wall
+again) a **page at a time**. Reading the Cooper Plato whole hit the 4M character
+cap — silently truncating it — and cost 10.2s of blocking bridge time; its EPUB is
+1834 spine items of ~3KB, one per printed page, so the page was already the natural
+unit. A turn is now milliseconds whatever the size of the book and "go to page" is a
+spine index rather than a guess. A `.txt` has no pages of its own and is cut into
+equal ones on a word boundary.
+
+Three "the reader is broken" reports turned out, on measurement, to be two facts
+about the files and one about the device. **Measure the source before changing the
+renderer** — it was the whole of the work each time:
+
+- **The Cooper Plato genuinely has no paragraphs.** Every one of its 1834 pages is a
+  *single* `<p>` with no classes — 2693 characters, zero line breaks. The paragraphs
+  and dialogue an online reader shows are not in the file. What *is* there is the
+  speaker label: **1256 of 1258 are `NAME:` in capitals**, 5.7 a page, and in a
+  dialogue that label *is* the paragraph break, so `_fmt()` breaks on `[A-Z]{3,}:`
+  and nothing else. OCR clips some of them (`RATES` for `SOCRATES`), which `{3,}`
+  still catches. **Do not break on sentence ends** (18.2 a page) — that fabricates
+  paragraphs the book does not have.
+- **Half of "a wall of text" was the measure.** A 960px line of 15px text runs to
+  ~110 characters, about double comfortable. The column is capped at `34em`.
+- **`flatten()` broke table rows but not table cells**, so a two-column contents
+  table read `IVenice in Venice`. A cell end is a **gap**, not a line break —
+  breaking there splits the row into alternating numerals and titles instead.
+- **`pg3400` is not a book.** Its five spine items are a cover, an index of works, a
+  contents listing, the Gutenberg licence and a back stub: Gutenberg's *catalogue*
+  volume, which links out to the actual works. There is no prose in it. Check a
+  download's spine before debugging why it shows nothing.
+
+### There is no PDF viewer on this device — the app renders them itself
+
+`pm query-activities --brief -a android.intent.action.VIEW -t application/pdf`
+answers **"No activities found"**. Nothing is installed that can render one, so the
+`openBook` hand-off could never have worked and no amount of intent-tuning would
+have fixed it.
+
+`android.graphics.pdf.PdfRenderer` is in the **framework** — no dependency, which
+matters in a project with no build system — and works a page at a time, matching the
+reader's existing unit. A page comes back over the bridge as `IMG:<data uri>`,
+because PdfRenderer **rasterises rather than extracting text**; the card shows it as
+an `<img>` and, since a rendered page cannot reflow, offers a zoom. Two things that
+are load-bearing:
+
+- **Erase the bitmap to white first.** PdfRenderer draws ink only; an unfilled
+  bitmap leaves the paper transparent, which reads as a black page.
+- **Cache the renderer** (keyed `name:length`, like the EPUB spine). Reopening a
+  `ParcelFileDescriptor` per page turn is the same mistake as re-parsing the OPF.
 
 ## Where things stand
 
