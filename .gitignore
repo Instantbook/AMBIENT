@@ -10,3 +10,7 @@ app/build/
 
 # Device-local config baked into the APK at build time, never published
 app/worker.url
+
+# Python bytecode from tools/ — `git add -A` would otherwise publish it
+__pycache__/
+*.pyc
