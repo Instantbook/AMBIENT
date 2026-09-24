@@ -445,14 +445,17 @@ Three "the reader is broken" reports turned out, on measurement, to be two facts
 about the files and one about the device. **Measure the source before changing the
 renderer** — it was the whole of the work each time:
 
-- **The Cooper Plato genuinely has no paragraphs.** Every one of its 1834 pages is a
-  *single* `<p>` with no classes — 2693 characters, zero line breaks. The paragraphs
-  and dialogue an online reader shows are not in the file. What *is* there is the
-  speaker label: **1256 of 1258 are `NAME:` in capitals**, 5.7 a page, and in a
-  dialogue that label *is* the paragraph break, so `_fmt()` breaks on `[A-Z]{3,}:`
-  and nothing else. OCR clips some of them (`RATES` for `SOCRATES`), which `{3,}`
-  still catches. **Do not break on sentence ends** (18.2 a page) — that fabricates
-  paragraphs the book does not have.
+- **The Cooper Plato genuinely has no paragraphs.** Every one of its 1832 pages is a
+  *single* `<p>` with no classes — 2693 characters, and the book contains **zero
+  `<br>` tags and zero newlines inside any paragraph**. Archive.org's EPUB export
+  collapses each printed page into one block; its own stylesheet says
+  `p {text-indent: 4em}`, so the producer meant one `<p>` per paragraph and emitted
+  one per *page*. Nothing on the device can recover what is not in the file. The
+  device-side `_fmt()` therefore breaks on `[A-Z]{3,}:` speaker labels and nothing
+  else, which is all the flat text affords — and is why a four-paragraph speech
+  still reads as one block. **Do not break on sentence ends** (18.2 a page) — that
+  fabricates paragraphs the book does not have. The real fix is `tools/pdf2epub.py`
+  below.
 - **Half of "a wall of text" was the measure.** A 960px line of 15px text runs to
   ~110 characters, about double comfortable. The column is capped at `34em`.
 - **`flatten()` broke table rows but not table cells**, so a two-column contents
@@ -462,6 +465,40 @@ renderer** — it was the whole of the work each time:
   contents listing, the Gutenberg licence and a back stub: Gutenberg's *catalogue*
   volume, which links out to the actual works. There is no prose in it. Check a
   download's spine before debugging why it shows nothing.
+
+### `tools/pdf2epub.py` — paragraphs are geometry, not text
+
+A scanned book's paragraphing survives in the PDF text layer as **coordinates**, so
+the converter rebuilds an EPUB with real `<p>` tags by measuring line positions
+rather than guessing from prose. On the Cooper Plato: 1831 pages, **44,539
+paragraphs**, 2.8 MB, roughly 15 minutes. Four things it learned the hard way, all of
+which produce *plausible* garbage when wrong:
+
+- **The column must be per page.** The book's median left edge is 33pt while page
+  900's is 6pt — the scan is not uniformly aligned — so one global column finds zero
+  indents on half the book.
+- **And it must be the GAP between clusters, not a median or a mode.** Which cluster
+  is bigger flips with the material: page 305 is 26 indented lines against 18 body
+  ones, so the median *is* the indent and the threshold lands above everything,
+  yielding one 2113-character block. The gap between the two clusters is stable
+  whichever way the ratio falls.
+- **"Previous line was short" is a fallback only.** Alongside indentation it
+  double-counts, because in a dialogue every turn both ends short *and* indents —
+  that gave 37.6 paragraphs a page against a true ~24.
+- **Frequency cannot canonicalise OCR names.** The errors are *systematic*, so a
+  misreading repeats until it outvotes the truth: `VISTROR` appeared 162 times beside
+  `VISITOR`, `POTUS` 107 times against the correct `POLUS` twice, and `CRITIAS` — a
+  real, separate character — was being folded into `CUINIAS`. The authority is a
+  fixed `CAST` list instead; a name already in it is never remapped, ties are left
+  alone, and doubled letters are collapsed first (that alone fixes `THEAETETUUS`,
+  `SOCRATEES`). 97.7% resolve globally; a page-context pass takes the stragglers,
+  since a page only has two or three speakers on it. **Only the label at the head of
+  a paragraph is ever rewritten — never a word of the prose.**
+
+**The EPUB it writes must use DOUBLE-quoted XML attributes.** `epubSpine()` matches
+`full-path="([^"]+)"` and `attr()` matches `key="([^"]*)"` with regexes, so
+single-quoted attributes — valid XML — leave the device with an empty spine and a
+book of zero pages. This was caught in verification, not on the device.
 
 ### There is no PDF viewer on this device — the app renders them itself
 
