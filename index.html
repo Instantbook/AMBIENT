@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v103";
+const APP_VERSION="v104";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -3950,7 +3950,7 @@ const cardTV={
   id:"tv",title:"LIVE TV",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:55,refresh:null,offline:"live-only",
   sel:0,_level:"home",_cc:null,_list:null,_busy:false,_note:"",
-  _filter:"",_ctx:null,
+  _filter:"",_ctx:null,_arm:null,
   COUNTRIES:[
     ["gr","GREECE"],["cy","CYPRUS"],["us","UNITED STATES"],
     ["ca","CANADA"],["uk","UNITED KINGDOM"],["ie","IRELAND"],
@@ -4016,6 +4016,7 @@ const cardTV={
   },
   _openLocal(ctx,name){
     this._cc=null;this._doc=name;this._level="channels";this.sel=0;
+    this._arm=null;
     this._filter="";this._note="";this._busy=false;
     let txt="";
     try{txt=hostBridge.readDoc(name)||""}catch(e){}
@@ -4025,6 +4026,7 @@ const cardTV={
   },
   _open(ctx,cc){
     this._cc=cc;this._level="channels";this.sel=0;this._filter="";
+    this._arm=null;
     this._list=null;this._busy=true;this._note="";ctx.rerender();
     const base=WORKER_BASE();
     if(!base){this._busy=false;this._note="needs the Worker URL";
@@ -4063,14 +4065,20 @@ const cardTV={
       return (this._list||[])
         .filter(c=>!q||c.name.toLowerCase().indexOf(q)>=0||
           (c.cat||"").toLowerCase().indexOf(q)>=0)
-        .map(c=>({ch:c,label:(this._isFav(c.url)?"★ ":"")+c.name,
-          meta:[c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
+        .map(c=>({ch:c,
+          label:(this._arm===c.url?"✕ ":this._isFav(c.url)?"★ ":"")+c.name,
+          meta:this._arm===c.url?"REMOVE? ► again · ◄ keeps"
+            :[c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
             .filter(Boolean).join(" · ")}));
     }
     const rows=[];
     const favs=this._favs();
-    favs.forEach(f=>rows.push({ch:f,fav:true,label:"★ "+f.name,
-      meta:[f.cc?f.cc.toUpperCase():"",f.cat,f.q].filter(Boolean).join(" · ")}));
+    favs.forEach(f=>rows.push({ch:f,fav:true,
+      label:(this._arm===f.url?"✕ ":"★ ")+f.name,
+      /* The row itself carries the question. A prompt only at the foot of
+         the screen is easy to press straight past. */
+      meta:this._arm===f.url?"REMOVE? ► again · ◄ keeps"
+        :[f.cc?f.cc.toUpperCase():"",f.cat,f.q].filter(Boolean).join(" · ")}));
     /* A hand-curated list outranks the public index, because somebody
        already checked which of these actually answer. */
     this._docs().forEach(d=>rows.push({doc:d.name,
@@ -4090,14 +4098,35 @@ const cardTV={
   onKey(ctx,k,held){
     const rows=this._rows();
     if(this._busy)return k==="enter";
-    if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();
+    /* Any move abandons a pending removal: if the highlight has left the
+       row, the second press was not meant for it. */
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;this._arm=null;
+      ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._arm=null;ctx.rerender();
       return true}
-    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
-    if(k==="enter"){this._enter(ctx);return true}
+    if(k==="enter"){this._arm=null;this._enter(ctx);return true}
     const r=rows[this.sel];
-    /* Right stars, exactly as it does in RADIO - the same gesture for the
-       same idea, on the card that is most like it. */
-    if(k==="right"&&r&&r.ch){this._star(ctx,r.ch);return true}
+    /* Right stars in one press, because adding a favourite is harmless and
+       undoes itself. REMOVING one is armed first: a stray press used to
+       delete it outright, and a favourite is the only record of which of
+       295 streams actually answered, so re-finding it is real work.
+       RADIO keeps its single press - eleven stations, nothing to search.
+       Same gesture, different cost of the accident.
+       The confirm is ► again, not OK: OK plays the channel here, and
+       deletion does not belong under the key you press to watch. */
+    if(k==="right"&&r&&r.ch){
+      if(!this._isFav(r.ch.url)){this._arm=null;this._star(ctx,r.ch);
+        return true}
+      if(this._arm===r.ch.url){this._arm=null;this._star(ctx,r.ch);
+        return true}
+      this._arm=r.ch.url;
+      this._note="remove "+r.ch.name+" from favourites? ► again · ◄ keeps";
+      ctx.rerender();return true;
+    }
+    /* ◄ cancels rather than paging, so the thumb's instinctive "no" works
+       before it is spent on a page jump. */
+    if(k==="left"&&this._arm){this._arm=null;this._note="kept";
+      ctx.rerender();return true}
     if((k==="left"||k==="right")&&mode==="full"&&rows.length>pageRows()){
       const step=pageRows()*(held?2:1);
       this.sel=Math.max(0,Math.min(rows.length-1,
@@ -4107,6 +4136,7 @@ const cardTV={
     return false;
   },
   onBack(ctx){
+    if(this._arm){this._arm=null;this._note="kept";ctx.rerender();return true}
     if(this._level==="channels"){
       this._level="home";this.sel=0;this._note="";this._filter="";
       this._doc=null;
