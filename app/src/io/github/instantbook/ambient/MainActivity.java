@@ -41,6 +41,9 @@ import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebChromeClient;
+import android.webkit.ConsoleMessage;
+import android.util.Log;
 import android.widget.Toast;
 
 /**
@@ -70,6 +73,7 @@ public class MainActivity extends Activity {
      *  deliberately NOT an exit gesture any more - see onKeyDown. */
     private static final long EXIT_WINDOW_MS = 2000L;
 
+    private static final String TAG = "Ambient";
     private WebView web;
     private long lastBackAt = 0L;
     private boolean backWasLong = false;
@@ -1809,6 +1813,13 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
 
+        // A login flow opens a popup, and with no support for one the page
+        // flashed the provider's screen and went black - which reads as a
+        // crash rather than as a blocked window. Both of these are
+        // meaningless without the WebChromeClient below.
+        s.setSupportMultipleWindows(true);
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
+
         // The page is served over HTTPS, but most public radio streams are
         // still plain http - 7 of the 8 top Greek stations on
         // radio-browser.info, for instance. Chromium blocks mixed-content
@@ -1866,6 +1877,69 @@ public class MainActivity extends Activity {
                 return super.shouldInterceptRequest(v, req);
             }
         });
+        /*
+         * There is ONE WebView here, so a popup has only one place to go:
+         * into it. That suits a sign-in redirect, which is a one-way trip
+         * that ends back on the site - and BACK still unwinds it, because
+         * loadUrl keeps the history entry.
+         *
+         * resultMsg does not carry the target URL, so the documented way
+         * to learn it is to hand the transport a throwaway WebView and
+         * read the first navigation it attempts.
+         *
+         * None of this makes Google sign-in work. Google refuses OAuth
+         * inside an embedded WebView by design (403 disallowed_useragent),
+         * because the hosting app can read anything typed into it - which
+         * is a good rule, and not one to defeat with a spoofed user agent.
+         * Sites that offer an email code instead will work; Google will
+         * now fail with a message rather than a black screen.
+         */
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog,
+                    boolean isUserGesture, android.os.Message resultMsg) {
+                final WebView main = view;
+                WebView tmp = new WebView(view.getContext());
+                tmp.getSettings().setJavaScriptEnabled(true);
+                tmp.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView v,
+                            WebResourceRequest req) {
+                        String u = req.getUrl() != null
+                                ? req.getUrl().toString() : null;
+                        if (u != null) {
+                            Log.i(TAG, "popup -> " + u);
+                            main.loadUrl(u);
+                        }
+                        v.destroy();
+                        return true;
+                    }
+                });
+                WebView.WebViewTransport t =
+                        (WebView.WebViewTransport) resultMsg.obj;
+                t.setWebView(tmp);
+                resultMsg.sendToTarget();
+                return true;
+            }
+
+            /* A page that closes its own window used to leave a black
+               surface behind. Step back instead, so the site reappears. */
+            @Override
+            public void onCloseWindow(WebView w) {
+                if (w != null && w.canGoBack()) w.goBack();
+            }
+
+            /* Without this the console went nowhere, which is why a failed
+               login was indistinguishable from a crash. */
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage m) {
+                Log.i(TAG, "console " + m.messageLevel() + ": "
+                        + m.message() + "  @" + m.sourceId()
+                        + ":" + m.lineNumber());
+                return true;
+            }
+        });
+
         web.addJavascriptInterface(host, "AmbientHost");
 
         // Logins on sites opened from LAUNCH. Persistent cookies and site
