@@ -406,6 +406,20 @@ Two related layout facts: the windowed stage body is **187px — four rows** on 
 `prefersFull` sends RADIO/MUSIC/VIDEO straight to fullscreen (~16 rows); and ◄► page-jump by a measured
 `pageRows()` in browse levels, staying transport only at the level that owns a timeline.
 
+**The same hardcoded 500 came back in the Worker**, which makes this a pattern rather than an
+incident. `/tv` capped its parse loop at 500 channels — and it counted while parsing in **file
+order**, on a source that arrives *already sorted by name*, so the `out.sort()` after it was a
+no-op. The cap therefore did not sample 500 channels, it **ended the alphabet at F**: 946 of the
+United States' 1446 channels, 65%, could be neither browsed nor searched, and the user found it
+by noticing the list "only goes up to about N". Raised to 3000, which is a sanity bound rather
+than a working one (the largest list the card can request is that US 1446).
+
+The general lesson, now paid for twice: **a cap applied to an ordered source truncates the order,
+not the importance.** It reads as "the list ends at F" rather than "the list is incomplete", which
+is precisely why nobody suspects a cap. When a limit is unavoidable, the count has to be visible —
+LIVE TV's header renders `N channels`, so a suspiciously round total is at least *available* as a
+tell.
+
 
 **An ordinary app cannot read a removable volume at all** — not even with All-files
 access granted. Direct filesystem scanning found a card full of music completely empty

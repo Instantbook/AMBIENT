@@ -130,7 +130,17 @@ export default {
         if (!r.ok) return json({ error: "no list for " + cc }, 404, env);
         const lines = (await r.text()).split("\n");
         const out = [];
-        for (let i = 0; i < lines.length && out.length < 500; i++) {
+        /* A SANITY bound, not a working one: the largest list this card can
+           ask for is the United States at 1446 channels.
+           It used to be 500, and that was the MediaStore bug again - a
+           hardcoded 500 with no error and no marker. Worse here because of
+           where it applied: the count runs while parsing in FILE order and
+           these M3Us arrive already sorted by name, so the out.sort() below
+           was a no-op and the cap did not sample 500 channels, it ended the
+           alphabet at F. 946 of the 1446 US channels - 65% - could neither
+           be browsed nor searched. If a list ever does reach this bound,
+           the card's header shows the count, so 3000 exactly is the tell. */
+        for (let i = 0; i < lines.length && out.length < 3000; i++) {
           const L = lines[i];
           if (L.indexOf("#EXTINF") !== 0) continue;
           /* the URL is the next line that is not a comment */
