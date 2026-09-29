@@ -533,6 +533,45 @@ are load-bearing:
 - **Cache the renderer** (keyed `name:length`, like the EPUB spine). Reopening a
   `ParcelFileDescriptor` per page turn is the same mistake as re-parsing the OPF.
 
+### SCANNER — public-safety radio is a queue of calls, not a stream
+
+`cardScan` reads **OpenMHz** (`api.openmhz.com`), a volunteer network of receivers that decode
+trunked P25/DMR systems and publish each transmission as a finished file. So a scanner here is a
+queue of discrete calls, which suits this device better than a stream would: no dead air, no HLS
+(which this WebView cannot play natively), every URL already https so nothing is blocked as mixed
+content, and a call is a ~20s / 86KB m4a that starts instantly instead of a buffer that must fill.
+
+Measured before building, and each fact decided something:
+
+- **462 systems, 380 active**, and a call fetched **12 seconds** after it was transmitted — so
+  near-real-time is achievable without a stream.
+- **The API sends `Access-Control-Allow-Origin: *`**, so it is a plain `direct` fetch with no
+  Worker in the way. **The media host sends no CORS header at all**, so calls are marked
+  `cors:false` — routing a non-CORS source through WebAudio *mutes* it, so they play natively and
+  cannot drive the real FFT. Do not "fix" this by marking them `cors:true`.
+- **The API answers a client with no browser User-Agent with a 403 Cloudflare challenge.** From
+  the WebView the UA is a real browser's and it does not. If it ever starts failing, that is the
+  first thing to check — and the card says "no network (or the API refused this client)" rather
+  than pretending to know which.
+- **Coverage is US, Canada and Australia** (11 international systems). That is not a gap in the
+  card: most of Europe moved public-safety radio onto encrypted TETRA years ago, so there is
+  nothing to receive. Every "worldwide scanner" app is really a North American one.
+
+Three invariants that are load-bearing, all verified against the live payloads with a stubbed
+harness before deploying:
+
+- **Starting a scan joins live traffic**, marking the returned backlog as heard and playing only
+  the newest — otherwise opening a busy system replays the last hour.
+- **Advance is OLDEST-unheard-first**, not newest. Playing the newest would run a conversation
+  backwards.
+- **The poll runs while SCANNING, not only while staged.** PODCASTS gates its poll to the stage
+  because nobody asked for that traffic; here the user is listening right now, and a scanner that
+  stops finding calls when you glance at another tile is broken rather than polite. 15s, because
+  OpenMHz is free and volunteer-run and an active system produces a call roughly every 20s.
+
+`►` stars a system in one press and arms removal in two, the same trade LIVE TV settled on.
+Double-pressing the tile starts and stops the scan without entering the card.
+
 ## Where things stand
 
 ### Asked for, not yet built

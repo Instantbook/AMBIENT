@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v104";
+const APP_VERSION="v105";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -302,6 +302,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.tale.saves",
   "ambient.card.markets.syms",
   "ambient.card.tv.favs",
+  "ambient.card.scan.favs",
   "ambient.card.read.marks","ambient.card.read.bm",
   "ambient.card.read.paper",
   "ambient.dim"];
@@ -4223,6 +4224,333 @@ const cardTV={
    milliseconds whatever the size of the book, nothing is truncated, and
    "go to page" is a spine index rather than a guess. A plain text file has
    no pages of its own, so it is cut into equal ones on a word boundary. */
+/* ---- scanner ----
+   Public-safety radio, and it is NOT a stream. OpenMHz is a volunteer
+   network of receivers that decode trunked P25/DMR systems and publish
+   each transmission as a finished file, so a "scanner" here is a queue of
+   discrete calls rather than an open channel. That turns out to suit this
+   device better than a stream would: no dead air between calls, no HLS
+   (which this WebView cannot play natively), every URL already https so
+   nothing is blocked as mixed content, and a call is a 20-second m4a that
+   starts instantly instead of a buffer that has to fill.
+
+   Measured before building: 462 systems, 380 of them active, and a call
+   fetched 12 seconds after it was transmitted. The API sends
+   Access-Control-Allow-Origin:*, so it is a direct fetch with no Worker in
+   the way - but the MEDIA host sends no CORS header at all, so calls must
+   play natively and cannot drive the real FFT. Marked cors:false for that
+   reason: routing a non-CORS source through WebAudio MUTES it.
+
+   Coverage is US, Canada and Australia, and that is not a limitation of
+   this card. Most of Europe moved public-safety radio onto encrypted TETRA
+   years ago, so there is nothing to receive - which is why every
+   "worldwide" scanner app is really a North American one. */
+const cardScan={
+  id:"scan",title:"SCANNER",icon:"wave",prefersFull:true,
+  pane:"listen",size:"large",order:56,refresh:null,offline:"live-only",
+  sel:0,_level:"home",_ctx:null,_note:"",_busy:false,_arm:null,
+  _systems:null,_region:null,_sys:null,_calls:null,_seen:null,
+  _scanning:false,_lastPoll:0,
+  API:"https://api.openmhz.com",
+
+  init(ctx){
+    this._ctx=ctx;this._seen={};
+    /* A natural end is the only signal that separates "this call finished"
+       from "the user pressed stop", so stopping stays stopped instead of
+       pulling the next call out of the queue. Guarded on ownership because
+       RADIO, MUSIC and PODCASTS share this one bus. */
+    on("audio",e=>{
+      if(!e||!this._scanning||!this._owns())return;
+      if(e.state==="ended"||e.state==="error")this._next(ctx);
+    });
+    /* The poll runs while SCANNING, not only while staged. PODCASTS gates
+       its poll to the stage because nobody asked for that traffic; here the
+       user is listening right now, and a scanner that stops finding calls
+       the moment you look at another tile is broken rather than polite.
+       Idle and unstaged, this costs nothing. 15s is deliberate too -
+       OpenMHz is free and volunteer-run, and an active system produces a
+       call every 20s or so, so faster would only be rude. */
+    setInterval(()=>{
+      const staged_=staged();
+      const onStage=!!(staged_&&staged_.id===this.id);
+      if(!this._sys||(!this._scanning&&!onStage))return;
+      if(Date.now()-this._lastPoll<15000)return;
+      this._poll(ctx);
+    },3000);
+  },
+
+  _owns(){const c=audioBus.current();return !!(c&&c.scan)},
+  _favs(){
+    const f=this._ctx?this._ctx.storage.get("favs",[]):[];
+    return Array.isArray(f)?f:[];
+  },
+  _isFav(id){return this._favs().some(f=>f.id===id)},
+  _star(ctx,sys){
+    const f=this._favs(),at=f.findIndex(x=>x.id===sys.id);
+    if(at>=0){f.splice(at,1);this._note="unstarred "+sys.name}
+    else{
+      if(f.length>=30){this._note="thirty favourites is the limit";
+        ctx.rerender();return}
+      f.push({id:sys.id,name:sys.name,place:sys.place||""});
+      this._note="starred "+sys.name;
+    }
+    ctx.storage.set("favs",f);ctx.rerender();
+  },
+
+  /* ---- data ---- */
+  _load(ctx){
+    if(this._systems||this._busy)return;
+    if(!online){this._note="no network";ctx.rerender();return}
+    this._busy=true;this._note="";ctx.rerender();
+    fetch(this.API+"/systems",{signal:AbortSignal.timeout(25000)})
+      .then(r=>r.json())
+      .then(d=>{
+        const raw=(d&&d.systems)||[];
+        /* Keep only what this card shows. The payload is 176KB and most of
+           it is counters that would never reach the screen. */
+        this._systems=raw.map(s=>({
+          id:String(s.shortName||""),
+          name:String(s.name||s.shortName||"").slice(0,42),
+          place:[s.city,s.state].filter(Boolean).join(", ").slice(0,28),
+          region:String(s.state||(s.systemType==="international"
+            ?"INTERNATIONAL":"")||"—"),
+          active:!!s.active,
+          last:String(s.lastActive||""),
+        })).filter(s=>s.id);
+        if(!this._systems.length)this._note="no systems listed";
+      })
+      .catch(e=>{
+        const m=String((e&&e.message)||e);
+        /* The API answers a plain client with a 403 challenge; from a
+           WebView the user agent is a real browser's and it does not. Say
+           which of the two happened rather than "failed". */
+        this._note=/Failed to fetch|NetworkError/i.test(m)
+          ?"no network (or the API refused this client)"
+          :"failed: "+m.slice(0,40);
+      })
+      .then(()=>{this._busy=false;try{ctx.rerender()}catch(_){}});
+  },
+  _poll(ctx){
+    if(!this._sys)return;
+    this._lastPoll=Date.now();
+    fetch(this.API+"/"+encodeURIComponent(this._sys.id)+"/calls",
+      {signal:AbortSignal.timeout(20000)})
+      .then(r=>r.json())
+      .then(d=>{
+        const calls=(d&&d.calls)||[];
+        this._calls=calls.map(c=>({
+          id:String(c._id||c.filename||c.url||""),
+          url:String(c.url||""),
+          tg:c.talkgroupNum,
+          len:c.len||0,
+          emerg:!!c.emergency,
+          time:String(c.time||""),
+        })).filter(c=>c.url);
+        /* Nothing is playing but scanning is on: the queue ran dry and the
+           poll has just refilled it. */
+        if(this._scanning&&!this._owns())this._next(ctx);
+      })
+      .catch(()=>{})
+      .then(()=>{try{ctx.rerender()}catch(_){}});
+  },
+
+  /* ---- playback ---- */
+  _play(ctx,c){
+    if(!c||!c.url)return;
+    this._seen[c.id]=1;
+    audioBus.play({label:(this._sys?this._sys.name:"scanner")+
+      (c.tg!=null?" · TG "+c.tg:""),url:c.url,cors:false,scan:true});
+    ctx.rerender();
+  },
+  /* Oldest unheard first, so a burst of traffic is heard in the order it
+     happened. Playing the newest would replay a conversation backwards. */
+  _next(ctx){
+    const list=(this._calls||[]).filter(c=>!this._seen[c.id]);
+    if(!list.length){this._note="waiting for the next call…";
+      try{ctx.rerender()}catch(_){}return}
+    list.sort((a,b)=>a.time<b.time?-1:1);
+    this._note="";
+    this._play(ctx,list[0]);
+  },
+  _openSys(ctx,sys){
+    this._sys=sys;this._level="calls";this.sel=0;this._arm=null;
+    this._calls=null;this._note="";this._lastPoll=0;
+    ctx.rerender();this._poll(ctx);
+  },
+  _scan(ctx,on){
+    this._scanning=!!on;
+    if(!on){audioBus.stop();this._note="stopped"}
+    else{
+      /* Only calls from HERE on: starting a scanner should not replay the
+         last hour, it should join the traffic as it is now. */
+      (this._calls||[]).forEach(c=>{this._seen[c.id]=1});
+      const newest=(this._calls||[])[0];
+      if(newest){delete this._seen[newest.id];this._play(ctx,newest)}
+      else this._note="waiting for the next call…";
+    }
+    ctx.rerender();
+  },
+
+  /* ---- rows ---- */
+  _fmtAgo(t){
+    const ms=Date.now()-Date.parse(t||"");
+    if(!isFinite(ms)||ms<0)return "";
+    const s=Math.round(ms/1000);
+    if(s<60)return s+"s ago";
+    if(s<3600)return Math.round(s/60)+"m ago";
+    if(s<86400)return Math.round(s/3600)+"h ago";
+    return Math.round(s/86400)+"d ago";
+  },
+  _regions(){
+    const m={};
+    (this._systems||[]).forEach(s=>{m[s.region]=(m[s.region]||0)+1});
+    return Object.keys(m).sort().map(r=>({region:r,n:m[r]}));
+  },
+  _rows(){
+    if(this._level==="calls"){
+      return (this._calls||[]).map(c=>({call:c,
+        label:(c.emerg?"! ":"")+(c.tg!=null?"TG "+c.tg:"call")+
+          (this._seen[c.id]?"":" ·NEW"),
+        meta:[this._fmtAgo(c.time),c.len?c.len+"s":""]
+          .filter(Boolean).join(" · ")}));
+    }
+    if(this._level==="regions")
+      return this._regions().map(r=>({region:r.region,label:r.region,
+        meta:r.n+(r.n===1?" system":" systems")}));
+    if(this._level==="systems"){
+      const list=(this._systems||[])
+        .filter(s=>this._region==="ACTIVE"?s.active:s.region===this._region);
+      list.sort((a,b)=>this._region==="ACTIVE"
+        ?(a.last<b.last?1:-1):a.name.localeCompare(b.name));
+      return list.map(s=>({sys:s,
+        label:(this._arm===s.id?"✕ ":this._isFav(s.id)?"★ ":"")+s.name,
+        meta:this._arm===s.id?"REMOVE? ► again · ◄ keeps"
+          :[s.place,s.active?this._fmtAgo(s.last):"idle"]
+            .filter(Boolean).join(" · ")}));
+    }
+    const rows=[],all=this._systems||[];
+    this._favs().forEach(f=>{
+      const s=all.find(x=>x.id===f.id)||{id:f.id,name:f.name,place:f.place};
+      rows.push({sys:s,
+        label:(this._arm===s.id?"✕ ":"★ ")+s.name,
+        meta:this._arm===s.id?"REMOVE? ► again · ◄ keeps"
+          :[s.place,s.active?this._fmtAgo(s.last):""].filter(Boolean)
+            .join(" · ")});
+    });
+    rows.push({region:"ACTIVE",label:"ACTIVE NOW",
+      meta:all.filter(s=>s.active).length+" systems with traffic"});
+    rows.push({regions:true,label:"BROWSE BY REGION",
+      meta:this._regions().length+" regions"});
+    return rows;
+  },
+
+  _enter(ctx){
+    const r=this._rows()[this.sel];
+    if(!r||this._busy)return;
+    this._arm=null;
+    if(r.call){this._scanning=false;this._play(ctx,r.call);return}
+    if(r.sys){this._openSys(ctx,r.sys);this._scan(ctx,true);return}
+    if(r.regions){this._level="regions";this.sel=0;ctx.rerender();return}
+    if(r.region){this._region=r.region;this._level="systems";this.sel=0;
+      ctx.rerender();return}
+  },
+  onKey(ctx,k,held){
+    const rows=this._rows();
+    if(this._busy)return k==="enter";
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;this._arm=null;
+      ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;this._arm=null;ctx.rerender();
+      return true}
+    if(k==="enter"){this._enter(ctx);return true}
+    const r=rows[this.sel];
+    /* ► stars a system in one press and arms its removal in two - the same
+       trade LIVE TV settled on, for the same reason: adding undoes itself,
+       losing one means finding it again among 462. */
+    if(k==="right"&&r&&r.sys){
+      const id=r.sys.id;
+      if(!this._isFav(id)){this._arm=null;this._star(ctx,r.sys);return true}
+      if(this._arm===id){this._arm=null;this._star(ctx,r.sys);return true}
+      this._arm=id;
+      this._note="remove "+r.sys.name+" from favourites? ► again";
+      ctx.rerender();return true;
+    }
+    if(k==="left"&&this._arm){this._arm=null;this._note="kept";
+      ctx.rerender();return true}
+    return false;
+  },
+  onToggle(ctx){
+    /* Double-press the tile to start or stop the scan without walking back
+       into the card - the one control worth reaching from the bezel. */
+    if(this._sys)this._scan(ctx,!this._scanning);
+  },
+  onBack(ctx){
+    if(this._arm){this._arm=null;this._note="kept";ctx.rerender();return true}
+    if(this._level==="calls"){
+      this._level=this._region?"systems":"home";this.sel=0;ctx.rerender();
+      return true;
+    }
+    if(this._level==="systems"){this._level="regions";this.sel=0;
+      ctx.rerender();return true}
+    if(this._level==="regions"){this._level="home";this.sel=0;
+      this._region=null;ctx.rerender();return true}
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._enter(ctx)},
+
+  render(ctx){
+    this._load(ctx);
+    const rows=this._rows(),w=rowWindow(this,rows,this.sel);
+    const list=w.items.map((r,j)=>{
+      const i=w.start+j,on=(i===this.sel);
+      const cur=audioBus.current();
+      const live=!!(r.call&&cur&&cur.url===r.call.url);
+      return "<div class='row"+(on?" hl sel":"")+"' data-row='"+i+"'>"+
+        "<span class='"+(on?"":"lbl")+"'"+
+        (r.call&&r.call.emerg?" style='color:var(--accent)'":"")+">"+
+        (live?"▶ ":"")+esc(r.label)+"</span>"+
+        "<span class='lbl' style='font-size:12px'>"+esc(r.meta||"")+
+        "</span></div>";
+    }).join("");
+    const title=this._level==="calls"
+      ?(this._sys?this._sys.name:"SYSTEM")
+      :this._level==="systems"
+      ?(this._region==="ACTIVE"?"ACTIVE NOW":this._region||"")
+      :this._level==="regions"?"REGIONS":"SCANNER";
+    const sub=this._level==="calls"
+      ?((this._calls||[]).length+" recent calls · "+
+        (this._scanning?"SCANNING":"paused"))
+      :this._level==="home"
+      ?(this._systems
+        ?this._systems.filter(s=>s.active).length+" systems live"
+        :"loading the directory…")
+      :rows.length+" rows";
+    return "<div style='margin-bottom:12px'><div style='color:var(--accent);"+
+      "font-size:15px'>"+esc(title)+"</div><div class='lbl'>"+esc(sub)+
+      "</div></div>"+
+      (this._busy?"<div class='state'>fetching the directory…</div>"
+        :list||"<div class='state'>nothing here</div>")+
+      (this._note?"<div class='state' style='margin-top:6px;"+
+        "color:var(--accent)'>"+esc(this._note)+"</div>":"")+
+      "<div class='state' style='margin-top:8px'>▲▼ choose · OK "+
+      (this._level==="calls"?"replay a call":"open")+
+      (this._level==="home"||this._level==="systems"?" · ► star":"")+
+      " · BACK up<br>double-press the tile to start or stop the scan"+
+      "</div>";
+  },
+
+  renderCompact(ctx){
+    if(this._scanning&&this._sys)
+      return face(this._sys.id.toUpperCase().slice(0,7),"scanning",
+        {color:"var(--accent)",
+         sub:(this._calls||[]).length+" calls"});
+    if(this._sys)return face(this._sys.id.toUpperCase().slice(0,7),"paused",
+      {sub:(this._calls||[]).length+" calls"});
+    if(!this._systems)return face("—","scanner");
+    return face(this._systems.filter(s=>s.active).length,"systems live",
+      {sub:this._favs().length?this._favs().length+" starred":"police · fire"});
+  }
+};
+
 const cardRead={
   id:"read",title:"LIBRARY",icon:"layers",prefersFull:true,
   selAnchor:"nearest",
@@ -5363,7 +5691,8 @@ const cardSystem={
 persist();
 
 registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
-  cardRadio,cardMusic,cardPodcasts,cardVideo,cardTV,cardRead,cardTale,
+  cardRadio,cardMusic,cardPodcasts,cardVideo,cardTV,cardScan,cardRead,
+  cardTale,
   cardVis,
   cardLaunch,
   cardScenes,
