@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v105";
+const APP_VERSION="v106";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4249,7 +4249,7 @@ const cardScan={
   id:"scan",title:"SCANNER",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:56,refresh:null,offline:"live-only",
   sel:0,_level:"home",_ctx:null,_note:"",_busy:false,_arm:null,
-  _systems:null,_region:null,_sys:null,_calls:null,_seen:null,
+  _systems:null,_region:null,_sys:null,_calls:null,_seen:null,_tgs:null,
   _scanning:false,_lastPoll:0,
   API:"https://api.openmhz.com",
 
@@ -4312,10 +4312,17 @@ const cardScan={
           id:String(s.shortName||""),
           name:String(s.name||s.shortName||"").slice(0,42),
           place:[s.city,s.state].filter(Boolean).join(", ").slice(0,28),
-          region:String(s.state||(s.systemType==="international"
-            ?"INTERNATIONAL":"")||"—"),
+          /* country FIRST. Keeping only `state` put every non-US system
+             into one "INTERNATIONAL" heap, which is why Canada could not
+             be found although it is there. "New South Wales" arrives in
+             the country field upstream; it is a state, so fold it in. */
+          region:String(s.country==="New South Wales"?"Australia"
+            :(s.country||s.state||"—")).trim()||"—",
           active:!!s.active,
           last:String(s.lastActive||""),
+          /* What the system actually carries - marine, a fire department,
+             provincial government. Without it the names are opaque. */
+          desc:String(s.description||"").replace(/\s+/g," ").slice(0,90),
         })).filter(s=>s.id);
         if(!this._systems.length)this._note="no systems listed";
       })
@@ -4359,7 +4366,7 @@ const cardScan={
     if(!c||!c.url)return;
     this._seen[c.id]=1;
     audioBus.play({label:(this._sys?this._sys.name:"scanner")+
-      (c.tg!=null?" · TG "+c.tg:""),url:c.url,cors:false,scan:true});
+      " · "+this._tgName(c.tg),url:c.url,cors:false,scan:true});
     ctx.rerender();
   },
   /* Oldest unheard first, so a burst of traffic is heard in the order it
@@ -4374,8 +4381,35 @@ const cardScan={
   },
   _openSys(ctx,sys){
     this._sys=sys;this._level="calls";this.sel=0;this._arm=null;
-    this._calls=null;this._note="";this._lastPoll=0;
-    ctx.rerender();this._poll(ctx);
+    this._calls=null;this._note="";this._lastPoll=0;this._tgs=null;
+    ctx.rerender();this._poll(ctx);this._loadTgs(ctx);
+  },
+  /* Talkgroup names, once per system. "TG 3" says nothing; "Hotshot/K-9/
+     Air" says what you are listening to - and it is where fire, EMS,
+     marine and air traffic become visible rather than implied. */
+  _loadTgs(ctx){
+    const id=this._sys&&this._sys.id;
+    if(!id)return;
+    fetch(this.API+"/"+encodeURIComponent(id)+"/talkgroups",
+      {signal:AbortSignal.timeout(20000)})
+      .then(r=>r.json())
+      .then(d=>{
+        const t=(d&&d.talkgroups)||{},m={};
+        Object.keys(t).forEach(k=>{
+          const v=t[k]||{};
+          const nm=String(v.description||v.alpha||"").trim();
+          if(nm)m[String(v.num!=null?v.num:k)]=nm.slice(0,28);
+        });
+        this._tgs=m;
+      })
+      .catch(()=>{this._tgs=null})
+      .then(()=>{if(this._sys&&this._sys.id===id)
+        try{ctx.rerender()}catch(_){}});
+  },
+  _tgName(tg){
+    if(tg==null)return "call";
+    const m=this._tgs&&this._tgs[String(tg)];
+    return m||("TG "+tg);
   },
   _scan(ctx,on){
     this._scanning=!!on;
@@ -4408,11 +4442,18 @@ const cardScan={
   },
   _rows(){
     if(this._level==="calls"){
-      return (this._calls||[]).map(c=>({call:c,
-        label:(c.emerg?"! ":"")+(c.tg!=null?"TG "+c.tg:"call")+
+      /* An explicit stop. Double-pressing the tile toggles the scan and
+         BACK deliberately leaves it running - a scanner should survive a
+         glance at another tile, as RADIO does - but a gesture nobody can
+         see is not a control. */
+      const head=[{stop:true,
+        label:this._scanning?"■ STOP SCANNING":"▶ START SCANNING",
+        meta:this._scanning?"or double-press the tile":"from the newest call"}];
+      return head.concat((this._calls||[]).map(c=>({call:c,
+        label:(c.emerg?"! ":"")+this._tgName(c.tg)+
           (this._seen[c.id]?"":" ·NEW"),
         meta:[this._fmtAgo(c.time),c.len?c.len+"s":""]
-          .filter(Boolean).join(" · ")}));
+          .filter(Boolean).join(" · ")})));
     }
     if(this._level==="regions")
       return this._regions().map(r=>({region:r.region,label:r.region,
@@ -4425,10 +4466,15 @@ const cardScan={
       return list.map(s=>({sys:s,
         label:(this._arm===s.id?"✕ ":this._isFav(s.id)?"★ ":"")+s.name,
         meta:this._arm===s.id?"REMOVE? ► again · ◄ keeps"
-          :[s.place,s.active?this._fmtAgo(s.last):"idle"]
+          :[s.place||s.region,s.active?this._fmtAgo(s.last):"idle",
+            s.desc?s.desc.slice(0,38):""]
             .filter(Boolean).join(" · ")}));
     }
     const rows=[],all=this._systems||[];
+    /* Reachable without walking back into the system you started. */
+    if(this._scanning&&this._sys)
+      rows.push({stop:true,label:"■ STOP SCANNING",
+        meta:this._sys.name.slice(0,26)});
     this._favs().forEach(f=>{
       const s=all.find(x=>x.id===f.id)||{id:f.id,name:f.name,place:f.place};
       rows.push({sys:s,
@@ -4448,6 +4494,7 @@ const cardScan={
     const r=this._rows()[this.sel];
     if(!r||this._busy)return;
     this._arm=null;
+    if(r.stop){this._scan(ctx,!this._scanning);return}
     if(r.call){this._scanning=false;this._play(ctx,r.call);return}
     if(r.sys){this._openSys(ctx,r.sys);this._scan(ctx,true);return}
     if(r.regions){this._level="regions";this.sel=0;ctx.rerender();return}
@@ -4534,7 +4581,9 @@ const cardScan={
       "<div class='state' style='margin-top:8px'>▲▼ choose · OK "+
       (this._level==="calls"?"replay a call":"open")+
       (this._level==="home"||this._level==="systems"?" · ► star":"")+
-      " · BACK up<br>double-press the tile to start or stop the scan"+
+      " · BACK up<br>"+
+      (this._scanning?"scanning — the STOP row, or double-press the tile"
+        :"double-press the tile to start or stop the scan")+
       "</div>";
   },
 
