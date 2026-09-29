@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v106";
+const APP_VERSION="v107";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -303,6 +303,7 @@ const CFG_KEYS=["ambient.worker","ambient.theme","ambient.scene",
   "ambient.card.markets.syms",
   "ambient.card.tv.favs",
   "ambient.card.scan.favs",
+  "ambient.card.scan.tgf",
   "ambient.card.read.marks","ambient.card.read.bm",
   "ambient.card.read.paper",
   "ambient.dim"];
@@ -4372,9 +4373,15 @@ const cardScan={
   /* Oldest unheard first, so a burst of traffic is heard in the order it
      happened. Playing the newest would replay a conversation backwards. */
   _next(ctx){
-    const list=(this._calls||[]).filter(c=>!this._seen[c.id]);
-    if(!list.length){this._note="waiting for the next call…";
-      try{ctx.rerender()}catch(_){}return}
+    const list=(this._calls||[])
+      .filter(c=>!this._seen[c.id]&&this._allowed(c.tg));
+    if(!list.length){
+      const all=this._tgList().length;
+      this._note=(all&&this._excl().length>=all)
+        ?"every talkgroup is muted — OK on TALKGROUPS to restore"
+        :"waiting for the next call…";
+      try{ctx.rerender()}catch(_){}return;
+    }
     list.sort((a,b)=>a.time<b.time?-1:1);
     this._note="";
     this._play(ctx,list[0]);
@@ -4406,6 +4413,41 @@ const cardScan={
       .then(()=>{if(this._sys&&this._sys.id===id)
         try{ctx.rerender()}catch(_){}});
   },
+  /* The EXCLUDED talkgroups for this system. Excluded rather than
+     included so a talkgroup added upstream tomorrow is heard by default -
+     an allow-list would silently drop it. */
+  _excl(){
+    if(!this._ctx||!this._sys)return [];
+    const m=this._ctx.storage.get("tgf",{});
+    const a=m&&typeof m==="object"?m[this._sys.id]:null;
+    return Array.isArray(a)?a.map(String):[];
+  },
+  _setExcl(arr){
+    if(!this._ctx||!this._sys)return;
+    const m=this._ctx.storage.get("tgf",{});
+    const o=(m&&typeof m==="object")?m:{};
+    if(arr.length)o[this._sys.id]=arr.map(String).slice(0,200);
+    else delete o[this._sys.id];
+    this._ctx.storage.set("tgf",o);
+  },
+  _allowed(tg){
+    if(tg==null)return true;
+    return this._excl().indexOf(String(tg))<0;
+  },
+  /* Every talkgroup this system is known to have: the named ones from the
+     API, plus any number seen in the recent calls that the API did not
+     list - an unnamed talkgroup still carries traffic and must be
+     filterable. */
+  _tgList(){
+    const seen={};
+    (this._calls||[]).forEach(c=>{
+      if(c.tg!=null){const k=String(c.tg);seen[k]=(seen[k]||0)+1}
+    });
+    const keys=Object.keys(this._tgs||{});
+    Object.keys(seen).forEach(k=>{if(keys.indexOf(k)<0)keys.push(k)});
+    keys.sort((a,b)=>(parseInt(a,10)||0)-(parseInt(b,10)||0));
+    return keys.map(k=>({tg:k,name:this._tgName(k),n:seen[k]||0}));
+  },
   _tgName(tg){
     if(tg==null)return "call";
     const m=this._tgs&&this._tgs[String(tg)];
@@ -4418,7 +4460,7 @@ const cardScan={
       /* Only calls from HERE on: starting a scanner should not replay the
          last hour, it should join the traffic as it is now. */
       (this._calls||[]).forEach(c=>{this._seen[c.id]=1});
-      const newest=(this._calls||[])[0];
+      const newest=(this._calls||[]).filter(c=>this._allowed(c.tg))[0];
       if(newest){delete this._seen[newest.id];this._play(ctx,newest)}
       else this._note="waiting for the next call…";
     }
@@ -4441,6 +4483,18 @@ const cardScan={
     return Object.keys(m).sort().map(r=>({region:r,n:m[r]}));
   },
   _rows(){
+    if(this._level==="tgs"){
+      const ex=this._excl(),list=this._tgList();
+      const rows=[{all:true,
+        label:ex.length?"INCLUDE ALL":"ALL INCLUDED",
+        meta:ex.length?ex.length+" muted · OK restores":"nothing muted"}];
+      list.forEach(t=>rows.push({tg:t.tg,
+        label:(ex.indexOf(t.tg)<0?"✓ ":"· ")+t.name,
+        meta:[t.n?t.n+" recent":"quiet",
+          ex.indexOf(t.tg)<0?"":"muted"].filter(Boolean).join(" · ")+
+          " · ► only this"}));
+      return rows;
+    }
     if(this._level==="calls"){
       /* An explicit stop. Double-pressing the tile toggles the scan and
          BACK deliberately leaves it running - a scanner should survive a
@@ -4449,7 +4503,14 @@ const cardScan={
       const head=[{stop:true,
         label:this._scanning?"■ STOP SCANNING":"▶ START SCANNING",
         meta:this._scanning?"or double-press the tile":"from the newest call"}];
-      return head.concat((this._calls||[]).map(c=>({call:c,
+      const ex=this._excl(),all=this._tgList().length;
+      head.push({tgs:true,label:"TALKGROUPS",
+        meta:ex.length?(all-ex.length)+" of "+all+" · "+ex.length+" muted"
+          :(all||"—")+" · all included"});
+      /* Hidden here as well as in playback: a filter that only muted the
+         audio would leave rows that OK refuses to play. */
+      return head.concat((this._calls||[]).filter(c=>this._allowed(c.tg))
+        .map(c=>({call:c,
         label:(c.emerg?"! ":"")+this._tgName(c.tg)+
           (this._seen[c.id]?"":" ·NEW"),
         meta:[this._fmtAgo(c.time),c.len?c.len+"s":""]
@@ -4495,6 +4556,15 @@ const cardScan={
     if(!r||this._busy)return;
     this._arm=null;
     if(r.stop){this._scan(ctx,!this._scanning);return}
+    if(r.tgs){this._level="tgs";this.sel=0;this._note="";ctx.rerender();
+      return}
+    if(r.all){this._setExcl([]);this._note="all talkgroups included";
+      ctx.rerender();return}
+    if(r.tg!==undefined&&this._level==="tgs"){
+      const ex=this._excl(),at=ex.indexOf(r.tg);
+      if(at>=0)ex.splice(at,1); else ex.push(r.tg);
+      this._setExcl(ex);ctx.rerender();return;
+    }
     if(r.call){this._scanning=false;this._play(ctx,r.call);return}
     if(r.sys){this._openSys(ctx,r.sys);this._scan(ctx,true);return}
     if(r.regions){this._level="regions";this.sel=0;ctx.rerender();return}
@@ -4521,6 +4591,13 @@ const cardScan={
       this._note="remove "+r.sys.name+" from favourites? ► again";
       ctx.rerender();return true;
     }
+    /* Solo. The common case is not "mute three of twenty" but "I only
+       want this one", which would otherwise be nineteen presses. */
+    if(k==="right"&&this._level==="tgs"&&r&&r.tg!==undefined){
+      this._setExcl(this._tgList().map(t=>t.tg).filter(x=>x!==r.tg));
+      this._note="only "+r.label.replace(/^[✓·]\s*/,"");
+      ctx.rerender();return true;
+    }
     if(k==="left"&&this._arm){this._arm=null;this._note="kept";
       ctx.rerender();return true}
     return false;
@@ -4532,6 +4609,9 @@ const cardScan={
   },
   onBack(ctx){
     if(this._arm){this._arm=null;this._note="kept";ctx.rerender();return true}
+    if(this._level==="tgs"){
+      this._level="calls";this.sel=0;this._note="";ctx.rerender();return true;
+    }
     if(this._level==="calls"){
       this._level=this._region?"systems":"home";this.sel=0;ctx.rerender();
       return true;
@@ -4558,14 +4638,19 @@ const cardScan={
         "<span class='lbl' style='font-size:12px'>"+esc(r.meta||"")+
         "</span></div>";
     }).join("");
-    const title=this._level==="calls"
+    const title=this._level==="tgs"
+      ?"TALKGROUPS"
+      :this._level==="calls"
       ?(this._sys?this._sys.name:"SYSTEM")
       :this._level==="systems"
       ?(this._region==="ACTIVE"?"ACTIVE NOW":this._region||"")
       :this._level==="regions"?"REGIONS":"SCANNER";
-    const sub=this._level==="calls"
-      ?((this._calls||[]).length+" recent calls · "+
-        (this._scanning?"SCANNING":"paused"))
+    const sub=this._level==="tgs"
+      ?(this._sys?this._sys.name+" · OK mutes · ► only this":"")
+      :this._level==="calls"
+      ?((this._calls||[]).filter(c=>this._allowed(c.tg)).length+
+        " calls"+(this._excl().length?" · "+this._excl().length+" muted":"")+
+        " · "+(this._scanning?"SCANNING":"paused"))
       :this._level==="home"
       ?(this._systems
         ?this._systems.filter(s=>s.active).length+" systems live"
