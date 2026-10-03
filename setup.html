@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AMBIENT · setup</title>
+<!--
+  Why this page exists, separately from index.html
+  -----------------------------------------------
+  The Worker URL is compiled into the Android wrapper from app/worker.url,
+  which is gitignored so the URL is never published. A plain browser has no
+  bridge to ask, so every Worker-backed card reports "needs the Worker URL"
+  and there is nothing to do about it on a TV.
+
+  index.html gained a ?worker= parameter for this - but it could not be
+  DELIVERED, because the service worker serves the shell cache-first and
+  matches with ignoreSearch:true. So ".../AMBIENT/?worker=..." resolves to
+  the CACHED index.html, the old code, and the parameter is never read. The
+  fix could not arrive through the cache that was blocking it.
+
+  This file is the way through, and the trick is that it is NOT in the
+  service worker's SHELL. The fetch handler does
+  caches.match(...).then(hit => hit || fetch(request)) - so an uncached path
+  misses the cache and goes to the network every time, whatever stale shell
+  is stored.
+
+  And it needs no new app code at all: WORKER_BASE() has always read
+  localStorage, so writing the key from any page on this origin is enough.
+  The cached build picks it up on its next load.
+
+  https only. An http Worker would be blocked as mixed content from an
+  https page anyway, and a query parameter is attacker-supplyable in
+  principle, so it is checked rather than trusted.
+-->
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;background:#0b0d10;color:#e8eaed;
+       font:16px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       display:flex;align-items:center;justify-content:center;
+       min-height:100vh;padding:24px;box-sizing:border-box}
+  main{max-width:760px;width:100%}
+  h1{font-size:15px;letter-spacing:.22em;color:#4FD4E8;margin:0 0 20px;
+     font-weight:400}
+  .ok{font-size:22px;color:#7CD992;margin:0 0 8px}
+  .bad{font-size:22px;color:#FF8A6A;margin:0 0 8px}
+  code{background:#161a1f;padding:3px 7px;border-radius:3px;
+       word-break:break-all;color:#cfd4da}
+  p{margin:0 0 14px}
+  .dim{color:#8b949e;font-size:14px}
+  a.go{display:inline-block;margin-top:18px;padding:12px 22px;
+       background:#4FD4E8;color:#06212a;text-decoration:none;
+       border-radius:4px;letter-spacing:.1em;font-size:15px}
+  a.go:focus{outline:3px solid #fff;outline-offset:3px}
+  input{width:100%;box-sizing:border-box;margin:10px 0 4px;padding:12px;
+        background:#161a1f;border:1px solid #2b3238;border-radius:4px;
+        color:#e8eaed;font:inherit}
+</style>
+</head>
+<body>
+<main>
+  <h1>AMBIENT · SETUP</h1>
+  <div id="out"></div>
+</main>
+<script>
+(function(){
+  var out=document.getElementById("out");
+  var KEY="ambient.worker";
+  var OK=/^https:\/\/[A-Za-z0-9.-]+(\/\S*)?$/;
+
+  function esc(s){
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function stored(){
+    try{return localStorage.getItem(KEY)||""}catch(e){return ""}
+  }
+  function save(u){
+    try{localStorage.setItem(KEY,u);return true}catch(e){return false}
+  }
+  function done(u){
+    out.innerHTML=
+      '<p class="ok">Worker URL saved.</p>'+
+      '<p>Stored for this browser as <code>'+esc(u)+'</code></p>'+
+      '<p class="dim">LIVE TV, HEADLINES, podcast search and the text '+
+      'adventure should all work now. Nothing else needs doing - the app '+
+      'reads this on its next load.</p>'+
+      '<a class="go" id="go" href="./">OPEN AMBIENT</a>';
+    var g=document.getElementById("go");
+    if(g)g.focus();
+  }
+  function ask(msg){
+    var cur=stored();
+    out.innerHTML=
+      (msg?'<p class="bad">'+esc(msg)+'</p>':'')+
+      '<p>Paste the Cloudflare Worker URL for this install, or open this '+
+      'page with <code>?worker=https://&hellip;</code> on the end.</p>'+
+      '<input id="u" type="url" inputmode="url" spellcheck="false" '+
+      'placeholder="https://your-worker.workers.dev" value="'+esc(cur)+'">'+
+      '<p class="dim">https only. It is kept in this browser only - never '+
+      'sent anywhere and never written into the public repository.</p>'+
+      '<a class="go" id="go" href="#">SAVE</a>';
+    var i=document.getElementById("u"),g=document.getElementById("go");
+    function commit(){
+      var v=(i.value||"").trim().replace(/\/+$/,"");
+      if(!OK.test(v)){ask("That is not an https URL.");return}
+      if(!save(v)){ask("This browser refused to store it.");return}
+      done(v);
+    }
+    if(g)g.addEventListener("click",function(e){e.preventDefault();commit()});
+    i.addEventListener("change",commit);
+    i.addEventListener("keydown",function(e){
+      if(e.key==="Enter"){e.preventDefault();commit()}
+    });
+    i.focus();
+  }
+
+  var q="";
+  try{
+    q=(new URLSearchParams(location.search||"").get("worker")||"").trim()
+      .replace(/\/+$/,"");
+  }catch(e){
+    var m=/[?&]worker=([^&]+)/.exec(location.search||"");
+    if(m){try{q=decodeURIComponent(m[1]).trim().replace(/\/+$/,"")}catch(_){}}
+  }
+
+  if(q&&OK.test(q)){
+    if(save(q)){
+      /* Drop the parameter from the address bar so it does not sit in
+         history or travel with a copied link. */
+      try{
+        if(history&&history.replaceState)
+          history.replaceState({},"",location.pathname);
+      }catch(e){}
+      done(q);
+    }else ask("This browser refused to store it.");
+  }else if(q){
+    ask("That is not an https URL.");
+  }else{
+    ask("");
+  }
+})();
+</script>
+</body>
+</html>
