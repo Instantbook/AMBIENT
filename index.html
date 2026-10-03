@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v108";
+const APP_VERSION="v109";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -349,6 +349,30 @@ try{
     const u=(hostBridge.worker()||"").trim();
     if(u&&!localStorage.getItem("ambient.worker"))
       localStorage.setItem("ambient.worker",u);
+  }
+}catch(e){}
+/* In a BROWSER there is no bridge to ask, so the Worker URL can arrive
+   once as a query parameter:
+
+     .../AMBIENT/?worker=https://<your-worker>
+
+   It is remembered here and then stripped from the address bar, so it does
+   not sit in the browser's history and is not passed on by copying the
+   link. That keeps the URL in a bookmark rather than in a public file,
+   which is the whole reason app/worker.url is gitignored.
+
+   https only - an http value would be blocked as mixed content anyway.
+   An explicit parameter DOES override a stored value: it is the only way
+   to correct a wrong one, and someone typing it meant it. */
+try{
+  const q=new URLSearchParams(location.search||"");
+  const w=(q.get("worker")||"").trim().replace(/\/+$/,"");
+  if(/^https:\/\/[A-Za-z0-9.-]+(\/\S*)?$/.test(w)){
+    localStorage.setItem("ambient.worker",w);
+    q.delete("worker");
+    const rest=q.toString();
+    if(history&&history.replaceState)
+      history.replaceState({},"",location.pathname+(rest?"?"+rest:""));
   }
 }catch(e){}
 /* ---------------- theme bus ---------------- */
@@ -1909,6 +1933,8 @@ const cardHeadlines={
   render(ctx,data){
     const items=this._items(ctx,data);
     if(!items){
+      /* In a browser this used to be a dead end: no bridge to ask and no
+         way to type one in. Name the query parameter in the message. */
       if(!WORKER_BASE())return "<div class='state'>"+
         "No feed relay configured. Set your <b>Cloudflare Worker URL</b> "+
         "in the system card. Its <span class='val'>/feeds</span> endpoint "+
