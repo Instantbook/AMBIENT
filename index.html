@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v109";
+const APP_VERSION="v110";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -392,6 +392,61 @@ function applyTheme(name){
   localStorage.setItem("ambient.theme",name);persist();
   CARDS.forEach(c=>{try{c.onTheme&&c.onTheme(ctxFor(c),name)}catch(e){}});
 }
+
+/* ---------------- pointer pad ----------------
+   A browser that drives pages with a cursor instead of forwarding arrow
+   keys (Silk on a Fire TV; com.tcl.browser on the glasses, which is why
+   app/ exists) cannot reach a windowed list AT ALL. rowWindow() renders
+   only the rows that fit, so everything below the window is absent from
+   the DOM - nothing to hover and nothing to click. Clicking a visible row
+   already works through onPick; this supplies the missing "move the
+   window" and "go back", driving the same route() a key would.
+
+   Only without a host bridge: in the wrapper the d-pad arrives properly
+   and this would be clutter. */
+function pointerPad(){
+  if(hostBridge)return;
+  if(!document.body||document.getElementById("ppad"))return;
+  const pad=document.createElement("div");
+  pad.id="ppad";
+  pad.style.cssText=
+    "position:fixed;right:10px;top:50%;transform:translateY(-50%);"+
+    "display:flex;flex-direction:column;gap:6px;z-index:9999;"+
+    "font-family:var(--mono);opacity:.82";
+  const mk=(label,title,fn)=>{
+    const b=document.createElement("button");
+    b.type="button";b.textContent=label;b.title=title;
+    b.style.cssText=
+      "width:46px;height:40px;font-size:17px;line-height:1;cursor:pointer;"+
+      "background:rgba(14,18,22,.92);color:#e8eaed;border:1px solid #39424a;"+
+      "border-radius:5px;font-family:inherit";
+    /* stopPropagation so the shell's document click handler does not also
+       see this - it looks for rows and tiles, and a stray match would
+       double-act. */
+    b.addEventListener("click",e=>{
+      e.preventDefault();e.stopPropagation();
+      try{fn()}catch(err){}
+    });
+    pad.appendChild(b);
+    return b;
+  };
+  /* A screenful, not a pixel scroll: what moves is the SELECTION window,
+     and scrolling the body would leave the highlight behind. */
+  const many=k=>{
+    let n=8;
+    try{if(typeof pageRows==="function")n=Math.max(2,pageRows())}catch(e){}
+    for(let i=0;i<n;i++)route(k);
+  };
+  mk("⇈","page up",()=>many("up"));
+  mk("▲","up",()=>route("up"));
+  mk("OK","select",()=>route("enter"));
+  mk("▼","down",()=>route("down"));
+  mk("⇊","page down",()=>many("down"));
+  mk("↩","back",()=>route("back"));
+  document.body.appendChild(pad);
+}
+if(document.readyState!=="loading")pointerPad();
+else addEventListener("DOMContentLoaded",pointerPad);
 
 /* ---------------- audio bus (spec §8) ----------------
    ONE audio pipeline for the whole app. Any card plays through it;
@@ -4230,8 +4285,12 @@ const cardTV={
           (c.cat||"").toLowerCase().indexOf(q)>=0)
         .map(c=>({ch:c,
           label:(this._arm===c.url?"✕ ":this._isFav(c.url)?"★ ":"")+c.name,
+          /* In a browser an http stream can NEVER play - mixed content is
+             blocked and a page cannot opt out the way the wrapper does. Say
+             so in the row rather than letting OK fail on it. */
           meta:this._arm===c.url?"REMOVE? ► again · ◄ keeps"
-            :[c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
+            :[c.cat,c.q,c.s?"":(this._browser()?"http · needs the app":"http"),
+              c.part?"part-time":""]
             .filter(Boolean).join(" · ")}));
     }
     const rows=[];
