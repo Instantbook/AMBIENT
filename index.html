@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v111";
+const APP_VERSION="v112";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4173,7 +4173,15 @@ const cardTV={
     if(this._hlsP)return this._hlsP;
     this._hlsP=new Promise(res=>{
       const el=document.createElement("script");
-      el.src="hls.light.min.js";
+      /* The FULL build, not hls.light. The light one omits the
+         audio-stream-controller, so a stream carrying audio as a
+         separate rendition (EXT-X-MEDIA:TYPE=AUDIO) played video with
+         no sound at all - measured at 2 of 18 US channels, which is
+         "quite a few have no audio". Verified by diffing the builds:
+         that controller appears 0 times in light and 1 in full. The
+         light file stays in the repo so a client still running an
+         older cached index.html does not 404 on it. */
+      el.src="hls.min.js";
       el.onload=()=>res(!!window.Hls);
       el.onerror=()=>res(false);
       document.head.appendChild(el);
