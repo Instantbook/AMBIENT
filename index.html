@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v110";
+const APP_VERSION="v111";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4277,20 +4277,29 @@ const cardTV={
     ctx.rerender();
   },
 
+  /* What this host can actually play. A browser cannot load plain http
+     from an https page, so those channels are not merely labelled, they
+     are withheld - a dead row in a list of 1446 is just a press that
+     cannot work. The wrapper keeps everything: its native player handles
+     http fine. */
+  _pool(){
+    const l=this._list||[];
+    return this._browser()?l.filter(c=>c.s):l;
+  },
+  _hidden(){
+    const l=this._list||[];
+    return this._browser()?l.filter(c=>!c.s).length:0;
+  },
   _rows(){
     if(this._level==="channels"){
       const q=this._filter.toLowerCase();
-      return (this._list||[])
+      return this._pool()
         .filter(c=>!q||c.name.toLowerCase().indexOf(q)>=0||
           (c.cat||"").toLowerCase().indexOf(q)>=0)
         .map(c=>({ch:c,
           label:(this._arm===c.url?"✕ ":this._isFav(c.url)?"★ ":"")+c.name,
-          /* In a browser an http stream can NEVER play - mixed content is
-             blocked and a page cannot opt out the way the wrapper does. Say
-             so in the row rather than letting OK fail on it. */
           meta:this._arm===c.url?"REMOVE? ► again · ◄ keeps"
-            :[c.cat,c.q,c.s?"":(this._browser()?"http · needs the app":"http"),
-              c.part?"part-time":""]
+            :[c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
             .filter(Boolean).join(" · ")}));
     }
     const rows=[];
@@ -4298,9 +4307,15 @@ const cardTV={
     favs.forEach(f=>rows.push({ch:f,fav:true,
       label:(this._arm===f.url?"✕ ":"★ ")+f.name,
       /* The row itself carries the question. A prompt only at the foot of
-         the screen is easy to press straight past. */
+         the screen is easy to press straight past.
+         A favourite that cannot play HERE is marked rather than withheld:
+         it is on this list because it was deliberately chosen, and hiding
+         someone's own choice is worse than telling them. */
       meta:this._arm===f.url?"REMOVE? ► again · ◄ keeps"
-        :[f.cc?f.cc.toUpperCase():"",f.cat,f.q].filter(Boolean).join(" · ")}));
+        :[f.cc?f.cc.toUpperCase():"",f.cat,f.q,
+          (this._browser()&&String(f.url).indexOf("https://")!==0)
+            ?"needs the app":""]
+          .filter(Boolean).join(" · ")}));
     /* A hand-curated list outranks the public index, because somebody
        already checked which of these actually answer. */
     this._docs().forEach(d=>rows.push({doc:d.name,
@@ -4397,7 +4412,8 @@ const cardTV={
          ?this._doc.replace(/\.m3u8?$/i,"").replace(/[_-]+/g," ").toUpperCase()
          :(this.COUNTRIES.find(c=>c[0]===this._cc)||
            [,this._cc||""])[1])+"</div><div class='lbl'>"+
-       ((this._list||[]).length)+" channels"+
+       (this._pool().length)+" channels"+
+       (this._hidden()?" · "+this._hidden()+" http hidden":"")+
        (this._filter?" · filtered by “"+esc(this._filter)+"”":"")+
        "</div></div>"
       :"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
