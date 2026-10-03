@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v107";
+const APP_VERSION="v108";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1371,6 +1371,23 @@ document.addEventListener("mouseover",e=>{
   const i=frameCards().findIndex(c=>c.id===tileCardId(tile));
   if(i>=0&&i!==selIdx){selIdx=i;paintSel()}
 });
+
+/* A browser's BACK leaves the PAGE. In Silk on a Fire TV that means
+   losing AMBIENT altogether rather than climbing one level, and the only
+   way back in was to reload. So keep one sentinel history entry and turn
+   the pop into the "back" the shell already routes, immediately pushing a
+   fresh sentinel so there is always something to pop and the page can
+   never be popped off.
+
+   Only without a host bridge: the wrapper delivers Android BACK properly
+   and a second mechanism would fight it. */
+if(!hostBridge&&typeof history!=="undefined"&&history.pushState){
+  try{history.pushState({ambient:1},"")}catch(e){}
+  addEventListener("popstate",()=>{
+    try{history.pushState({ambient:1},"")}catch(e){}
+    try{route("back")}catch(e){}
+  });
+}
 
 function route(k,held){
   /* Blackout eats the first key and nothing else. Waking must not also do
@@ -3428,6 +3445,21 @@ const cardPodcasts={
     if(this.sel>=subs.length)this.sel=Math.max(0,subs.length);
     ctx.rerender();
   },
+  /* No bridge means no DownloadManager and no on-disk index - but an
+     episode's audio is just a URL in the feed, so stream it instead of
+     keeping a copy. cors:false: a podcast host need not send CORS headers,
+     and routing a non-CORS source through WebAudio mutes it. */
+  _browser(){return !(hostBridge&&hostBridge.listPodcasts)},
+  _playRemote(ctx,ep){
+    if(!ep||!ep.url)return;
+    const show=this._show?this._show.title:"";
+    const id="url:"+ep.url;
+    const at=this._positions(ctx)[id]||0;
+    ctx.audio.play({label:ep.title,url:ep.url,cors:false,region:show,
+      podcast:true,mediaId:id,at});
+    this._note=at?"resumed "+this._hms(at):"streaming";
+    render();
+  },
   _download(ctx,ep){
     const show=this._show?this._show.title:"";
     let id="";
@@ -3463,7 +3495,8 @@ const cardPodcasts={
       return (this._eps||[]).map(e=>{
         const f=this._downloadedFile(this._show?this._show.title:"",e.title);
         return {label:e.title,ep:e,file:f,
-          meta:(f?"● on device · ":"")+this._epDur(e)+
+          meta:(f?"● on device · ":this._browser()?"stream · ":"")+
+            this._epDur(e)+
             (e.bytes?" · "+Math.round(e.bytes/1048576)+" MB":"")};
       });
     if(this._level==="downloads")
@@ -3510,7 +3543,9 @@ const cardPodcasts={
       /* OK plays what is already here and fetches what is not - the two
          things you would ever want from an episode row, without asking
          which one this is. */
-      if(r.file)this._play(ctx,r.file); else this._download(ctx,r.ep);
+      if(r.file)this._play(ctx,r.file);
+      else if(this._browser())this._playRemote(ctx,r.ep);
+      else this._download(ctx,r.ep);
       return;
     }
   },
@@ -3559,15 +3594,10 @@ const cardPodcasts={
   onText(ctx,v){if(v&&String(v).trim())this._search(ctx,String(v).trim())},
 
   render(ctx){
-    if(!hostBridge)
-      return "<div class='state'>Podcasts need the AMBIENT app — a web "+
-        "page cannot download or index audio on the device.</div>";
-    /* The bridge is here but this method is not: an older APK. Say which,
-       rather than claiming there is no app at all - the same wrong message
-       the battery card used to give. */
-    if(!hostBridge.listPodcasts)
-      return "<div class='state'>This build of the app has no podcast "+
-        "bridge yet — reinstall the APK to enable downloading.</div>";
+    /* No gate any more. Without a bridge this card loses DOWNLOADING and
+       the on-device list, and keeps search, subscriptions, episodes and
+       playback - so refusing to render at all was throwing away most of
+       what it does. */
     this._maybeScan();
     const rows=this._rows();
     const head=this._level==="episodes"&&this._show
@@ -3643,8 +3673,6 @@ const cardPodcasts={
   },
 
   renderCompact(ctx){
-    if(!hostBridge)return face("—","app only");
-    if(!hostBridge.listPodcasts)return face("—","update app");
     const cur=audioBus.current();
     if(cur&&this._owns())
       return face(audioBus.paused()?"‖":"▶",esc(cur.label),
@@ -3952,7 +3980,11 @@ const cardTV={
   id:"tv",title:"LIVE TV",icon:"wave",prefersFull:true,
   pane:"listen",size:"large",order:55,refresh:null,offline:"live-only",
   sel:0,_level:"home",_cc:null,_list:null,_busy:false,_note:"",
-  _filter:"",_ctx:null,_arm:null,
+  _filter:"",_ctx:null,_arm:null,_live:null,_hls:null,_node:null,
+  _nodeUrl:null,_hlsP:null,
+  /* Immersive only while a stream is up: the browse list wants the frame
+     and its hints, a playing channel wants the whole panel. */
+  get immersive(){return !!this._live},
   COUNTRIES:[
     ["gr","GREECE"],["cy","CYPRUS"],["us","UNITED STATES"],
     ["ca","CANADA"],["uk","UNITED KINGDOM"],["ie","IRELAND"],
@@ -4049,10 +4081,113 @@ const cardTV={
       })
       .then(()=>{this._busy=false;try{ctx.rerender()}catch(_){}});
   },
+  /* No bridge means no native player to hand a stream to, so play it in
+     the page. Chromium has no native HLS, hence hls.js - fetched only when
+     something is about to play, and deliberately absent from the service
+     worker's SHELL (atomic, and it has killed the worker before; live TV
+     is useless offline regardless). */
+  _browser(){return !(hostBridge&&hostBridge.openUrl)},
+  _ensureHls(){
+    if(window.Hls)return Promise.resolve(true);
+    if(this._hlsP)return this._hlsP;
+    this._hlsP=new Promise(res=>{
+      const el=document.createElement("script");
+      el.src="hls.light.min.js";
+      el.onload=()=>res(!!window.Hls);
+      el.onerror=()=>res(false);
+      document.head.appendChild(el);
+    });
+    return this._hlsP;
+  },
+  _playPage(ctx,ch){
+    /* A browser blocks http media on an https page and cannot opt out the
+       way the wrapper does. Say so rather than show a dead player. */
+    if(String(ch.url).indexOf("https://")!==0){
+      this._note="plain http - a browser blocks it on an https page, so "+
+        "this one needs the app";
+      ctx.rerender();return;
+    }
+    this._note="connecting...";ctx.rerender();
+    this._ensureHls().then(got=>{
+      const isHls=/\.m3u8(\?|$)/i.test(ch.url);
+      if(isHls&&!(got&&window.Hls&&window.Hls.isSupported())){
+        this._note="this browser cannot play HLS";ctx.rerender();return;
+      }
+      this._live=ch;this._note="";
+      if(mode!=="full"){mode="full";render()} else ctx.rerender();
+      this._wireLive();
+    });
+  },
+  /* Built once per channel and handed back on every render: returning
+     markup would let the shell replace the <video> mid-stream - a fresh
+     element at time zero holding none of the buffer. */
+  _playerNode(ch){
+    if(this._node&&this._nodeUrl===ch.url)return this._node;
+    this._drop();
+    const wrap=document.createElement("div");
+    wrap.style.cssText="position:relative;width:100%;height:100%;"+
+      "background:#000";
+    const el=document.createElement("video");
+    el.id="tv-el";el.autoplay=true;el.preload="auto";
+    el.setAttribute("playsinline","");
+    el.style.cssText="width:100%;height:100%;object-fit:contain;"+
+      "background:#000";
+    const osd=document.createElement("div");
+    osd.id="tv-osd";
+    osd.style.cssText="position:absolute;left:0;right:0;bottom:7%;"+
+      "text-align:center;font-family:var(--mono);font-size:14px;"+
+      "letter-spacing:.1em;color:#fff;text-shadow:0 0 6px #000;"+
+      "opacity:1;transition:opacity .4s";
+    osd.textContent=ch.name+"   .   BACK stops";
+    setTimeout(()=>{try{osd.style.opacity="0"}catch(_){}},3200);
+    wrap.appendChild(el);wrap.appendChild(osd);
+    this._node=wrap;this._nodeUrl=ch.url;
+    return wrap;
+  },
+  /* Wired after the node is in the document - render() cannot attach to an
+     element the shell has not placed yet. */
+  _wireLive(){
+    setTimeout(()=>{
+      const el=document.getElementById("tv-el"),ch=this._live;
+      if(!el||!ch||el._wired)return;
+      el._wired=true;
+      if(/\.m3u8(\?|$)/i.test(ch.url)&&window.Hls&&window.Hls.isSupported()){
+        const h=new window.Hls({enableWorker:true});
+        this._hls=h;
+        h.on(window.Hls.Events.ERROR,(e,d)=>{
+          /* Only a FATAL error is worth reporting: hls.js recovers from the
+             ordinary ones itself, and surfacing those makes a working
+             stream look broken. */
+          if(!d||!d.fatal)return;
+          this._note="stream failed: "+
+            String(d.details||d.type||"").slice(0,38);
+          this._live=null;this._drop();
+          try{this._ctx&&this._ctx.rerender()}catch(_){}
+        });
+        h.loadSource(ch.url);h.attachMedia(el);
+      }else{
+        el.src=ch.url;
+        el.addEventListener("error",()=>{
+          this._note="stream failed";this._live=null;this._drop();
+          try{this._ctx&&this._ctx.rerender()}catch(_){}
+        },{once:true});
+      }
+      try{el.play()}catch(_){}
+    },0);
+  },
+  _drop(){
+    try{if(this._hls)this._hls.destroy()}catch(_){}
+    this._hls=null;this._node=null;this._nodeUrl=null;
+  },
+  _stopLive(ctx){
+    this._live=null;this._drop();this._note="stopped";ctx.rerender();
+  },
+
   /* The handoff. A false return means nothing on the device registered for
      the type at all, which is a different problem from a dead stream and
      should not be reported as one. */
   _play(ctx,ch){
+    if(this._browser())return this._playPage(ctx,ch);
     let ok=false;
     try{ok=hostBridge&&hostBridge.openUrl&&hostBridge.openUrl(ch.url)}
     catch(e){}
@@ -4098,6 +4233,16 @@ const cardTV={
     if(r.ch){this._play(ctx,r.ch);return}
   },
   onKey(ctx,k,held){
+    /* While a stream is up the card owns every key: there is no list
+       underneath to navigate, and a stray press must not walk away from a
+       playing channel. */
+    if(this._live){
+      const el=document.getElementById("tv-el");
+      if(k==="enter"&&el){
+        try{el.paused?el.play():el.pause()}catch(_){}
+      }
+      return true;
+    }
     const rows=this._rows();
     if(this._busy)return k==="enter";
     /* Any move abandons a pending removal: if the highlight has left the
@@ -4138,6 +4283,7 @@ const cardTV={
     return false;
   },
   onBack(ctx){
+    if(this._live){this._stopLive(ctx);return true}
     if(this._arm){this._arm=null;this._note="kept";ctx.rerender();return true}
     if(this._level==="channels"){
       this._level="home";this.sel=0;this._note="";this._filter="";
@@ -4149,12 +4295,9 @@ const cardTV={
   onPick(ctx,i){this.sel=i;this._enter(ctx)},
 
   render(ctx){
-    if(!hostBridge)
-      return "<div class='state'>Live TV needs the AMBIENT app — a web "+
-        "page cannot hand a stream to the device's player.</div>";
-    if(!hostBridge.openUrl)
-      return "<div class='state'>This build of the app has no openUrl "+
-        "bridge yet — reinstall the APK to enable Live TV.</div>";
+    /* The player IS the view while something plays, and returning the same
+       node every time is what stops the shell replacing it. */
+    if(this._live)return this._playerNode(this._live);
     const rows=this._rows(),w=rowWindow(this,rows,this.sel);
     const list=w.items.map((r,j)=>{
       const i=w.start+j,on=(i===this.sel);
@@ -4191,8 +4334,8 @@ const cardTV={
   },
 
   renderCompact(ctx){
-    if(!hostBridge)return face("—","app only");
-    if(!hostBridge.openUrl)return face("—","update app");
+    if(this._live)return face("LIVE",this._live.name.slice(0,16),
+      {color:"var(--accent)"});
     const n=this._favs().length;
     if(this._level==="channels"&&this._list)
       return face(this._list.length,"channels",
