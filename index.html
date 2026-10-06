@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v113";
+const APP_VERSION="v114";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4168,6 +4168,24 @@ const cardTV={
      worker's SHELL (atomic, and it has killed the worker before; live TV
      is useless offline regardless). */
   _browser(){return !(hostBridge&&hostBridge.openUrl)},
+  /* Remember what refused us. A third of these public streams are fenced
+     to their own country - ExoPlayer reports that as error 2004,
+     ERROR_CODE_IO_BAD_HTTP_STATUS, and hls.js as a 403 - and without a
+     record you rediscover the same dead channel every time you scroll
+     past it. Kept local rather than in config.json: it is derived
+     knowledge, true only from this network, and regenerable. */
+  _bad(){
+    const m=this._ctx?this._ctx.storage.get("bad",{}):{};
+    return (m&&typeof m==="object")?m:{};
+  },
+  _markBad(url,why){
+    if(!this._ctx||!url)return;
+    const m=this._bad(),keys=Object.keys(m);
+    if(keys.length>400)keys.slice(0,keys.length-400)
+      .forEach(k=>delete m[k]);
+    m[url]=String(why||"failed").slice(0,22);
+    this._ctx.storage.set("bad",m);
+  },
   _ensureHls(){
     if(window.Hls)return Promise.resolve(true);
     if(this._hlsP)return this._hlsP;
@@ -4260,6 +4278,7 @@ const cardTV={
             :code?String(code)
             :String(d.details||d.type||"failed");
           this._note="stream failed: "+why.slice(0,44);
+          this._markBad(ch.url,code?code:"failed");
           this._live=null;this._drop();
           try{this._ctx&&this._ctx.rerender()}catch(_){}
         });
@@ -4273,6 +4292,7 @@ const cardTV={
             :c===3?" - cannot decode this stream"
             :c===2?" - network"
             :"");
+          this._markBad(ch.url,c===4?"unplayable":c===2?"network":"failed");
           this._live=null;this._drop();
           try{this._ctx&&this._ctx.rerender()}catch(_){}
         },{once:true});
@@ -4316,14 +4336,15 @@ const cardTV={
   },
   _rows(){
     if(this._level==="channels"){
-      const q=this._filter.toLowerCase();
+      const q=this._filter.toLowerCase(),bad=this._bad();
       return this._pool()
         .filter(c=>!q||c.name.toLowerCase().indexOf(q)>=0||
           (c.cat||"").toLowerCase().indexOf(q)>=0)
         .map(c=>({ch:c,
           label:(this._arm===c.url?"✕ ":this._isFav(c.url)?"★ ":"")+c.name,
           meta:this._arm===c.url?"REMOVE? ► again · ◄ keeps"
-            :[c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
+            :[bad[c.url]?"✗ "+bad[c.url]+" here":"",
+              c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
             .filter(Boolean).join(" · ")}));
     }
     const rows=[];
