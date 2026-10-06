@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v112";
+const APP_VERSION="v113";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4248,8 +4248,18 @@ const cardTV={
              ordinary ones itself, and surfacing those makes a working
              stream look broken. */
           if(!d||!d.fatal)return;
-          this._note="stream failed: "+
-            String(d.details||d.type||"").slice(0,38);
+          /* Name the HTTP status, not just the hls.js detail. A bare
+             "fragLoadError" is undiagnosable; "403" says the stream
+             refused us, which on these public indexes is usually
+             geo-restriction rather than anything wrong here. */
+          let code=0;
+          try{code=(d.response&&d.response.code)||
+            (d.networkDetails&&d.networkDetails.status)||0}catch(_){}
+          const why=code===403?"403 - blocked for this region"
+            :code===404?"404 - gone"
+            :code?String(code)
+            :String(d.details||d.type||"failed");
+          this._note="stream failed: "+why.slice(0,44);
           this._live=null;this._drop();
           try{this._ctx&&this._ctx.rerender()}catch(_){}
         });
@@ -4257,7 +4267,13 @@ const cardTV={
       }else{
         el.src=ch.url;
         el.addEventListener("error",()=>{
-          this._note="stream failed";this._live=null;this._drop();
+          /* MediaError codes: 2 network, 3 decode, 4 unsupported source. */
+          let c=0;try{c=(el.error&&el.error.code)||0}catch(_){}
+          this._note="stream failed"+(c===4?" - this format is not playable"
+            :c===3?" - cannot decode this stream"
+            :c===2?" - network"
+            :"");
+          this._live=null;this._drop();
           try{this._ctx&&this._ctx.rerender()}catch(_){}
         },{once:true});
       }
