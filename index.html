@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v114";
+const APP_VERSION="v115";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4063,6 +4063,7 @@ const cardTV={
   sel:0,_level:"home",_cc:null,_list:null,_busy:false,_note:"",
   _filter:"",_ctx:null,_arm:null,_live:null,_hls:null,_node:null,
   _nodeUrl:null,_hlsP:null,
+  _sweeping:false,_swept:0,_swTotal:0,_swBad:0,_swStop:false,
   /* Immersive only while a stream is up: the browse list wants the frame
      and its hints, a playing channel wants the whole panel. */
   get immersive(){return !!this._live},
@@ -4326,6 +4327,77 @@ const cardTV={
      are withheld - a dead row in a list of 1446 is just a press that
      cannot work. The wrapper keeps everything: its native player handles
      http fine. */
+  /* Test every channel in the current country list and record what
+     refuses. Runs here, on the device, because a geo-fence answers to the
+     viewer's IP - a sweep from anywhere else measures someone else's
+     access. */
+  _sweep(ctx){
+    if(this._sweeping){
+      this._swStop=true;this._note="stopping…";ctx.rerender();return;
+    }
+    const list=this._pool().slice();
+    if(!list.length){this._note="nothing to test";ctx.rerender();return}
+    this._sweeping=true;this._swStop=false;
+    this._swept=0;this._swBad=0;this._swTotal=list.length;this._note="";
+    const bad=this._bad();
+    let i=0;
+    const one=()=>{
+      if(this._swStop||i>=list.length)return Promise.resolve();
+      const c=list[i++];
+      const ctl=(typeof AbortController!=="undefined")
+        ?new AbortController():null;
+      const t=setTimeout(()=>{try{ctl&&ctl.abort()}catch(_){}} ,12000);
+      const opts=ctl?{signal:ctl.signal}:{};
+      return fetch(c.url,opts)
+        .then(res=>{
+          /* Only a status we can actually READ condemns a channel. ~5% of
+             these send no CORS headers, where a fetch throws and tells us
+             nothing about playability - the wrapper's native player does
+             not care about CORS at all. A false positive would hide a
+             working channel permanently; a false negative costs one press.
+             A 200 also CLEARS an old mark, so the list heals. */
+          if(res.status>=400){bad[c.url]=String(res.status);this._swBad++}
+          else delete bad[c.url];
+          try{if(res.body&&res.body.cancel)res.body.cancel()}catch(_){}
+        })
+        .catch(()=>{})
+        .then(()=>{
+          clearTimeout(t);this._swept++;
+          if(this._swept%10===0){
+            ctx.storage.set("bad",bad);
+            try{ctx.rerender()}catch(_){}
+          }
+          return one();
+        });
+    };
+    /* Five at a time. These are free public endpoints, and hammering them
+       would both be rude and manufacture the 403s we are trying to
+       measure, because the stitchers rate-limit. */
+    const jobs=[];
+    for(let k=0;k<5;k++)jobs.push(one());
+    Promise.all(jobs).then(()=>{
+      this._sweeping=false;
+      ctx.storage.set("bad",bad);
+      this._note=(this._swStop?"stopped after ":"tested ")+this._swept+
+        " · "+this._swBad+" refused"+
+        (this._swBad?" and now hidden":"");
+      try{ctx.rerender()}catch(_){}
+    });
+  },
+  _forget(ctx){
+    ctx.storage.set("bad",{});
+    this._note="dead marks cleared";ctx.rerender();
+  },
+  _deadCount(){
+    const bad=this._bad();
+    return this._pool().filter(c=>bad[c.url]).length;
+  },
+  /* What the list SHOWS: playable by this host, minus what has been proven
+     to refuse. Favourites are exempt and handled on the home level. */
+  _visible(){
+    const bad=this._bad();
+    return this._pool().filter(c=>!bad[c.url]);
+  },
   _pool(){
     const l=this._list||[];
     return this._browser()?l.filter(c=>c.s):l;
@@ -4337,15 +4409,24 @@ const cardTV={
   _rows(){
     if(this._level==="channels"){
       const q=this._filter.toLowerCase(),bad=this._bad();
-      return this._pool()
+      const dead=this._deadCount();
+      const head=[{sweep:true,
+        label:this._sweeping?"■ STOP TESTING":"TEST THIS LIST",
+        meta:this._sweeping
+          ?this._swept+" / "+this._swTotal+" · "+this._swBad+" refused"
+          :(dead?dead+" hidden as dead · OK retests all"
+             :"OK tests every channel from here")}];
+      if(dead&&!this._sweeping)
+        head.push({forget:true,label:"SHOW THE DEAD ONES AGAIN",
+          meta:"clears "+dead+" mark"+(dead===1?"":"s")});
+      return head.concat(this._visible()
         .filter(c=>!q||c.name.toLowerCase().indexOf(q)>=0||
           (c.cat||"").toLowerCase().indexOf(q)>=0)
         .map(c=>({ch:c,
           label:(this._arm===c.url?"✕ ":this._isFav(c.url)?"★ ":"")+c.name,
           meta:this._arm===c.url?"REMOVE? ► again · ◄ keeps"
-            :[bad[c.url]?"✗ "+bad[c.url]+" here":"",
-              c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
-            .filter(Boolean).join(" · ")}));
+            :[c.cat,c.q,c.s?"":"http",c.part?"part-time":""]
+            .filter(Boolean).join(" · ")})));
     }
     const rows=[];
     const favs=this._favs();
@@ -4373,6 +4454,8 @@ const cardTV={
   _enter(ctx){
     const r=this._rows()[this.sel];
     if(!r||this._busy)return;
+    if(r.sweep){this._sweep(ctx);return}
+    if(r.forget){this._forget(ctx);return}
     if(r.doc){this._openLocal(ctx,r.doc);return}
     if(r.cc&&!r.ch){this._open(ctx,r.cc);return}
     if(r.ch){this._play(ctx,r.ch);return}
@@ -4457,8 +4540,9 @@ const cardTV={
          ?this._doc.replace(/\.m3u8?$/i,"").replace(/[_-]+/g," ").toUpperCase()
          :(this.COUNTRIES.find(c=>c[0]===this._cc)||
            [,this._cc||""])[1])+"</div><div class='lbl'>"+
-       (this._pool().length)+" channels"+
+       (this._visible().length)+" channels"+
        (this._hidden()?" · "+this._hidden()+" http hidden":"")+
+       (this._deadCount()?" · "+this._deadCount()+" dead hidden":"")+
        (this._filter?" · filtered by “"+esc(this._filter)+"”":"")+
        "</div></div>"
       :"<div style='margin-bottom:12px'><div style='color:var(--accent);"+
