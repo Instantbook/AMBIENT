@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v115";
+const APP_VERSION="v116";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -4063,7 +4063,7 @@ const cardTV={
   sel:0,_level:"home",_cc:null,_list:null,_busy:false,_note:"",
   _filter:"",_ctx:null,_arm:null,_live:null,_hls:null,_node:null,
   _nodeUrl:null,_hlsP:null,
-  _sweeping:false,_swept:0,_swTotal:0,_swBad:0,_swStop:false,
+  _sweeping:false,_swept:0,_swTotal:0,_swBad:0,_swStop:false,_swCc:"",
   /* Immersive only while a stream is up: the browse list wants the frame
      and its hints, a playing channel wants the whole panel. */
   get immersive(){return !!this._live},
@@ -4339,6 +4339,12 @@ const cardTV={
     if(!list.length){this._note="nothing to test";ctx.rerender();return}
     this._sweeping=true;this._swStop=false;
     this._swept=0;this._swBad=0;this._swTotal=list.length;this._note="";
+    /* Which list this run belongs to. The sweep deliberately survives
+       navigating away - it is a promise loop, not a render - but if you
+       then open a DIFFERENT country the progress would be read against a
+       list it is not testing. Results are unaffected either way: the marks
+       are keyed by URL, so they land on the right channels. */
+    this._swCc=this._doc||this._cc||"";
     const bad=this._bad();
     let i=0;
     const one=()=>{
@@ -4379,6 +4385,7 @@ const cardTV={
       this._sweeping=false;
       ctx.storage.set("bad",bad);
       this._note=(this._swStop?"stopped after ":"tested ")+this._swept+
+        " of "+String(this._swCc||"").toUpperCase()+
         " · "+this._swBad+" refused"+
         (this._swBad?" and now hidden":"");
       try{ctx.rerender()}catch(_){}
@@ -4413,7 +4420,9 @@ const cardTV={
       const head=[{sweep:true,
         label:this._sweeping?"■ STOP TESTING":"TEST THIS LIST",
         meta:this._sweeping
-          ?this._swept+" / "+this._swTotal+" · "+this._swBad+" refused"
+          ?this._swept+" / "+this._swTotal+" · "+this._swBad+" refused"+
+            ((this._swCc&&this._swCc!==(this._doc||this._cc))
+              ?" · testing "+String(this._swCc).toUpperCase():"")
           :(dead?dead+" hidden as dead · OK retests all"
              :"OK tests every channel from here")}];
       if(dead&&!this._sweeping)
