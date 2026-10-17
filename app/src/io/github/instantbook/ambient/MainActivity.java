@@ -1640,7 +1640,7 @@ public class MainActivity extends Activity {
         "  if(!isFinite(v.duration)||v.duration<=0){\n" +
         "    flash('LIVE - NO TIMELINE');return;}\n" +
         "  startScrub(v);}\n" +
-        "var okDown=false,okHeld=false;\n" +
+        "var okDown=false,okHeld=false,okT=0;\n" +
         "function clickAt(){var h=null;\n" +
         "  try{h=document.elementFromPoint(cx,cy)}catch(_){}\n" +
         // OK is what leaves the timeline again, so the mode cannot trap.
@@ -1674,7 +1674,7 @@ public class MainActivity extends Activity {
         "  return true;};\n" +
         "document.addEventListener('keyup',function(ev){\n" +
         "  if(ev.key!=='Enter'||!okDown)return;\n" +
-        "  okDown=false;\n" +
+        "  okDown=false;clearTimeout(okT);\n" +
         "  if(curMode&&!okHeld&&!scrub)clickAt();\n" +
         "  ev.preventDefault();ev.stopPropagation();\n" +
         "},true);\n" +
@@ -1693,8 +1693,10 @@ public class MainActivity extends Activity {
         "      ev.preventDefault();ev.stopPropagation();return;}\n" +
         "    if(d){nudge(d,ev.repeat===true);\n" +
         "      ev.preventDefault();ev.stopPropagation();return;}\n" +
-        "    if(!ev.repeat){okDown=true;okHeld=false;}\n" +
-        "    else if(okDown&&!okHeld){okHeld=true;holdTimeline();}\n" +
+        "    if(!ev.repeat){okDown=true;okHeld=false;\n" +
+        "      clearTimeout(okT);okT=setTimeout(function(){\n" +
+        "        if(okDown&&!okHeld){okHeld=true;holdTimeline();}\n" +
+        "      },500);}\n" +
         "    ev.preventDefault();ev.stopPropagation();return;}\n" +
         "  if(typing()){\n" +
         // In a text field the keys belong to the field: left/right are the
