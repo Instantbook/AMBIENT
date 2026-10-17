@@ -136,8 +136,15 @@
     '<div class="v big" id="bacc">—</div></div>'+
     '<div class="box"><div class="k">BRIDGE gyro x y z</div>'+
     '<div class="v big" id="bgyr">—</div></div>';
-  document.querySelector("main").insertBefore(bridgeBox,
-    document.getElementById("hint"));
+  /* #hint's own parent, NOT querySelector("main") - this page has no
+     <main> element. That selector was copied from setup.html, returned
+     null, and the TypeError aborted the whole script before it wired ANY
+     listener, which is why adding the bridge made the probe report fewer
+     events than before rather than more. */
+  var anchor=document.getElementById("hint");
+  if(anchor&&anchor.parentNode)
+    anchor.parentNode.insertBefore(bridgeBox,anchor);
+  else document.body.appendChild(bridgeBox);
   var br=document.getElementById("br"),
       bacc=document.getElementById("bacc"),
       bgyr=document.getElementById("bgyr");
