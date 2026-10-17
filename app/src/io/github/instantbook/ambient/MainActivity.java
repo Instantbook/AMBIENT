@@ -106,7 +106,21 @@ public class MainActivity extends Activity {
                 ax = e.values[0]; ay = e.values[1]; az = e.values[2];
             } else if (t == Sensor.TYPE_GYROSCOPE
                     || t == Sensor.TYPE_GYROSCOPE_UNCALIBRATED) {
-                gx = e.values[0]; gy = e.values[1]; gz = e.values[2];
+                /* An UNCALIBRATED gyro returns the rate in values[0..2]
+                   and its own estimate of the drift in values[3..5]. The
+                   documented way to use it is to subtract the second from
+                   the first; ignoring it leaves a standing offset that a
+                   consumer then has to rediscover for itself. Measured
+                   here: rate ~0.02 with a drift estimate of ~0.01, so it
+                   is half the signal at rest. */
+                if (t == Sensor.TYPE_GYROSCOPE_UNCALIBRATED
+                        && e.values.length >= 6) {
+                    gx = e.values[0] - e.values[3];
+                    gy = e.values[1] - e.values[4];
+                    gz = e.values[2] - e.values[5];
+                } else {
+                    gx = e.values[0]; gy = e.values[1]; gz = e.values[2];
+                }
             }
             motionAt = System.currentTimeMillis();
         }
@@ -1507,7 +1521,7 @@ public class MainActivity extends Activity {
         "  if(mLoop)return;\n" +
         "  try{if(!window.AmbientHost||!AmbientHost.motionOn)return;\n" +
         "    if(!AmbientHost.motionOn(true))return;}catch(_){return}\n" +
-        "  var SX=-1,SY=-1,SPD=1300,EXP=1.3,DZ=0.02,MAXV=1500;\n" +
+        "  var SX=-1,SY=-1,SPD=1500,EXP=1.3,DZ=0.09,MAXV=1500;\n" +
         "  var svx=0,svy=0,t0=0;\n" +
         "  var step=function(){\n" +
         "    mLoop=0;\n" +
@@ -1516,9 +1530,9 @@ public class MainActivity extends Activity {
         "    if(m&&m.on&&m.gx!=null){\n" +
         "      var mag=Math.abs(m.gx-bx)+Math.abs(m.gy-by)+\n" +
         "        Math.abs(m.gz-bz);\n" +
-        "      if(mag<0.08||bN<30){\n" +
-        "        var k=bN<30?0.2:0.02;bN++;\n" +
-        "        bx+=(m.gx-bx)*k;by+=(m.gy-by)*k;bz+=(m.gz-bz)*k;\n" +
+        "      if(mag<0.30){\n" +
+        "        bx+=(m.gx-bx)*0.03;by+=(m.gy-by)*0.03;\n" +
+        "        bz+=(m.gz-bz)*0.03;\n" +
         "      }\n" +
         "      var wx=m.gx-bx,wy=m.gy-by,wz=m.gz-bz;\n" +
         "      var ax=m.ax,ay=m.ay,az=m.az;\n" +
