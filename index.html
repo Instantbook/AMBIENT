@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v117";
+const APP_VERSION="v118";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -5956,7 +5956,40 @@ const cardDisplay={
 const cardDevice={
   id:"device",title:"DEVICE",icon:"gauge",
   pane:"system",size:"medium",order:85,refresh:null,offline:"cached",
-  _s:null,
+  _s:null,_imu:null,_imuWant:false,
+  /* The IMU, read through the bridge because the page cannot reach it at
+     all: this box publishes only the UNCALIBRATED accelerometer and
+     gyroscope, and Chromium's DeviceMotionEvent binds the calibrated
+     ones. Verified empirically - a test page saw zero events while a
+     native app's air-mouse worked. SensorManager in the wrapper is the
+     only way in, which is why this needs the APK and can never work in a
+     plain browser on this hardware. */
+  _imuLine(){
+    const h=window.AmbientHost;
+    if(!h||!h.motion)
+      return "<div class='lbl' style='font-size:12px;margin-top:14px'>"+
+        "IMU · needs a newer app build</div>";
+    const m=this._imu;
+    if(!m)
+      return "<div class='lbl' style='font-size:12px;margin-top:14px'>"+
+        "IMU · starting…</div>";
+    const f=v=>(v==null||isNaN(v))?"—":(Math.round(v*100)/100).toFixed(2);
+    /* "on" is what the bridge says it registered; "live" is whether a
+       sample has actually arrived. They differ when a listener registers
+       against a sensor that never reports, which is exactly the failure
+       worth seeing. */
+    const fresh=m.t&&(Date.now()-m.t)<4000;
+    return "<div style='margin-top:14px'>"+
+      "<div class='row'><span class='lbl'>IMU</span><span class='val' "+
+      "style='color:"+(m.on&&fresh?"var(--up)":"var(--down)")+"'>"+
+      (m.on?(fresh?"LIVE":"NO SAMPLES"):"OFF")+"</span></div>"+
+      "<div class='lbl' style='font-size:13px'>accel "+
+      f(m.ax)+"  "+f(m.ay)+"  "+f(m.az)+"</div>"+
+      "<div class='lbl' style='font-size:13px'>gyro&nbsp;&nbsp;"+
+      f(m.gx)+"  "+f(m.gy)+"  "+f(m.gz)+"</div>"+
+      "<div class='state'>tilt the box · one axis sits near 9.8 when "+
+      "level</div></div>";
+  },
   init(ctx){
     const poll=()=>{
       try{
@@ -5967,6 +6000,23 @@ const cardDevice={
       ctx.rerender();
     };
     poll();setInterval(poll,3000);
+    /* The card contract has no onStage hook, so this checks staged()
+       itself - the same approach SCANNER's poll uses. Sensors go off the
+       moment the card leaves the stage. */
+    setInterval(()=>{
+      const h=window.AmbientHost;
+      if(!h||!h.motion)return;
+      const st=staged();
+      const want=!!(st&&st.id===this.id);
+      if(want!==this._imuWant){
+        this._imuWant=want;
+        try{h.motionOn(want)}catch(e){}
+        if(!want)this._imu=null;
+      }
+      if(!want)return;
+      try{this._imu=JSON.parse(h.motion()||"null")}catch(e){this._imu=null}
+      renderCard(this);
+    },150);
     /* ONLY outside the app. Letting this run inside it as well was meant
        to save waiting for an APK install, and instead put a confidently
        wrong number on screen: the Battery Status API is deliberately
@@ -6117,7 +6167,7 @@ const cardDevice={
       "<div class='lbl' style='margin-top:4px'>share of one core · "+
       s.cores+" cores available</div>"+
       "<div class='state' style='margin-top:14px'>"+esc(s.model||"")+
-      "</div>";
+      "</div>"+this._imuLine();
   },
   renderCompact(ctx){
     const s=this._s,b=this._batt();
