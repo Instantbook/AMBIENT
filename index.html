@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v116";
+const APP_VERSION="v117";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -2677,8 +2677,18 @@ const cardLaunch={
     if(v.includes("|")){const p=v.split("|");label=p[0].trim();
       url=p.slice(1).join("|").trim()}
     if(!/^https?:\/\//i.test(url))url="https://"+url;
-    try{label=label||new URL(url).hostname.replace(/^www\./,"")
-      .toUpperCase()}catch(e){return}
+    /* Prefer the last real PATH segment: a label exists to tell two
+       entries apart, and the hostname cannot do that when both are on the
+       same site - which is how two pages here both read
+       INSTANTBOOK.GITHUB.IO. Falls back to the host when there is no
+       path, which is the common case for a bare domain. */
+    try{
+      const u=new URL(url);
+      const host=u.hostname.replace(/^www\./,"");
+      const seg=u.pathname.split("/").filter(Boolean).pop()||"";
+      const stem=seg.replace(/\.(html?|php|aspx?|jsp)$/i,"");
+      label=label||(stem?stem.replace(/[-_]+/g," "):host);
+    }catch(e){return}
     const links=this._links(ctx);
     /* The cap used to be push-then-slice(0,12), which silently threw away
        the entry just added once the list was full - the add appeared to do
@@ -2705,16 +2715,35 @@ const cardLaunch={
   render(ctx){
     const links=this._links(ctx);
     return links.map((l,i)=>{
-      let host="";try{host=new URL(l.url).hostname}catch(e){}
+      let host="",where="";
+      try{
+        const u=new URL(l.url);
+        host=u.hostname;
+        /* Host AND path. Showing the hostname alone made every page on a
+           site look like the same entry, and made a saved path look lost.
+           Trimmed from the FRONT when long, because the distinguishing
+           part of a URL is its tail - cutting the other way reprints the
+           same prefix on every row. */
+        const h=u.hostname.replace(/^www\./,"");
+        let p=(u.pathname==="/"?"":u.pathname)+(u.search||"");
+        /* Keep BOTH ends when it is too long: the host says whose site it
+           is, the tail says which page. Trimming only the front ate the
+           hostname ("…stantbook.github.io/..."), and trimming only the
+           back reprints the same prefix on every row. */
+        const room=44-h.length;
+        if(p.length>room)p="/…"+p.slice(-Math.max(6,room-2));
+        where=h+p;
+      }catch(e){}
       return "<div class='row"+(i===this.sel?" hl sel":"")+
         "' data-row='"+i+"'>"+
         "<span class='"+(i===this.sel?"":"lbl")+"'>"+esc(l.label)+
         "</span><span style='color:"+
         (i===this._del?"var(--down)":srcColor(host))+
         ";font-size:12px'>"+
-        (i===this._del?"remove?":esc(host))+"</span></div>";
+        (i===this._del?"remove?":esc(where))+"</span></div>";
     }).join("")+
-    "<input type='text' id='launch-in' placeholder='add: url  or  label|url'"+
+    "<input type='text' id='launch-in' placeholder='add: site.com/path  "+
+    "or  label|url'"+
     " style='margin-top:10px'>"+
     (this._note?"<div class='state' style='margin-top:6px;color:var(--accent)'>"+
       esc(this._note)+"</div>":"")+
