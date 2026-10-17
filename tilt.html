@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AMBIENT · tilt probe</title>
+<!--
+  A throwaway diagnostic, deliberately NOT in sw.js's SHELL.
+
+  Two questions it answers, both of which decide real work:
+
+  1. Can the PAGE read the IMU, or does this need a Java bridge?
+     The box really does have motion hardware - lsm6dsr_gyro and
+     lsm6dsr_accel, confirmed over ADB with live gravity on Z - but both
+     are the UNCALIBRATED sensor variants, and Chromium's DeviceMotion
+     normally binds the calibrated ones. If events arrive here, an
+     air-mouse costs no APK change at all. If they do not, it needs
+     SensorManager in MainActivity and a reinstall.
+
+  2. Is the IMU in the BOX or in the GLASSES?
+     This matters more than the cursor. CLAUDE.md has asserted that the
+     box has no sensors and that "nothing AR-shaped is possible by
+     design" - the first half is now known to be wrong, and if the IMU
+     turns out to sit in the glasses then head tracking is on the table,
+     which is a different class of thing entirely.
+     Test: hold the box still and move only the glasses, then the reverse.
+     Whichever one moves the numbers is where the chip is.
+
+  No permissions are requested: on Android a secure context gets these
+  events without a prompt. On iOS it would need requestPermission(), which
+  is why the button is here as a fallback rather than absent.
+-->
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;background:#0b0d10;color:#e8eaed;padding:16px;
+       font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  h1{font-size:13px;letter-spacing:.2em;color:#4FD4E8;margin:0 0 12px;
+     font-weight:400}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+        gap:8px;margin-bottom:12px}
+  .box{background:#141a20;border:1px solid #27303a;border-radius:5px;
+       padding:8px 10px}
+  .k{color:#8b949e;font-size:11px;letter-spacing:.12em}
+  .v{font-size:19px;margin-top:2px}
+  .big{font-size:15px}
+  .ok{color:#7CD992}.bad{color:#FF8A6A}.dim{color:#8b949e}
+  #dot{position:fixed;width:16px;height:16px;border-radius:50%;
+       background:#4FD4E8;box-shadow:0 0 10px #4FD4E8;left:50%;top:50%;
+       margin:-8px 0 0 -8px;pointer-events:none;transition:none}
+  button{font:inherit;padding:9px 16px;background:#4FD4E8;color:#06212a;
+         border:0;border-radius:4px;margin-top:6px}
+  p{margin:8px 0}
+</style>
+</head>
+<body>
+<h1>TILT PROBE</h1>
+<div class="grid">
+  <div class="box"><div class="k">DEVICEMOTION</div>
+    <div class="v" id="dm">waiting…</div></div>
+  <div class="box"><div class="k">DEVICEORIENTATION</div>
+    <div class="v" id="do">waiting…</div></div>
+  <div class="box"><div class="k">EVENTS / SEC</div>
+    <div class="v" id="hz">0</div></div>
+</div>
+<div class="grid">
+  <div class="box"><div class="k">ACCEL x y z (m/s²)</div>
+    <div class="v big" id="acc">—</div></div>
+  <div class="box"><div class="k">ROTATION a b g (°/s)</div>
+    <div class="v big" id="rot">—</div></div>
+  <div class="box"><div class="k">ORIENT α β γ (°)</div>
+    <div class="v big" id="ori">—</div></div>
+</div>
+<p class="dim" id="hint">
+  The dot follows tilt. Hold the BOX still and move only the GLASSES, then
+  the reverse — whichever moves the numbers is where the chip is.
+</p>
+<div id="perm"></div>
+<div id="dot"></div>
+<script>
+(function(){
+  var dm=document.getElementById("dm"), dox=document.getElementById("do"),
+      hz=document.getElementById("hz"), acc=document.getElementById("acc"),
+      rot=document.getElementById("rot"), ori=document.getElementById("ori"),
+      dot=document.getElementById("dot"), perm=document.getElementById("perm");
+  var n=0, nMotion=0, nOrient=0;
+  var f=function(v){return (v==null||isNaN(v))?"—":(Math.round(v*10)/10);};
+
+  setInterval(function(){
+    hz.textContent=n; n=0;
+    dm.innerHTML = nMotion
+      ? '<span class="ok">yes · '+nMotion+'</span>'
+      : '<span class="bad">no events</span>';
+    dox.innerHTML = nOrient
+      ? '<span class="ok">yes · '+nOrient+'</span>'
+      : '<span class="bad">no events</span>';
+  },1000);
+
+  function onMotion(e){
+    n++; nMotion++;
+    var a=e.accelerationIncludingGravity||e.acceleration||{};
+    var r=e.rotationRate||{};
+    acc.textContent=f(a.x)+"  "+f(a.y)+"  "+f(a.z);
+    rot.textContent=f(r.alpha)+"  "+f(r.beta)+"  "+f(r.gamma);
+    /* Gravity gives an absolute tilt, which is what an air-mouse should
+       use: integrating the gyro drifts, tilt does not. */
+    if(a.x!=null&&a.y!=null){
+      var x=Math.max(0,Math.min(1,0.5 - (a.x/9.81)*0.9));
+      var y=Math.max(0,Math.min(1,0.5 + ((a.y/9.81)-0.0)*0.9));
+      dot.style.left=(x*100)+"%";
+      dot.style.top=(y*100)+"%";
+    }
+  }
+  function onOrient(e){
+    nOrient++;
+    ori.textContent=f(e.alpha)+"  "+f(e.beta)+"  "+f(e.gamma);
+  }
+
+  function wire(){
+    addEventListener("devicemotion",onMotion);
+    addEventListener("deviceorientation",onOrient);
+  }
+  /* iOS demands a gesture before it will emit these; Android does not, so
+     the button only appears where it is actually needed. */
+  var needsAsk = (typeof DeviceMotionEvent!=="undefined" &&
+                  typeof DeviceMotionEvent.requestPermission==="function");
+  if(needsAsk){
+    var b=document.createElement("button");
+    b.textContent="ALLOW MOTION ACCESS";
+    b.addEventListener("click",function(){
+      DeviceMotionEvent.requestPermission().then(function(r){
+        perm.textContent="permission: "+r; if(r==="granted")wire();
+      }).catch(function(e){perm.textContent="permission failed: "+e});
+    });
+    perm.appendChild(b);
+  } else {
+    wire();
+    perm.innerHTML='<p class="dim">no permission prompt needed here'+
+      (typeof DeviceMotionEvent==="undefined"
+        ? ' — <span class="bad">but DeviceMotionEvent does not exist in '+
+          'this browser at all</span>' : '')+'</p>';
+  }
+})();
+</script>
+</body>
+</html>

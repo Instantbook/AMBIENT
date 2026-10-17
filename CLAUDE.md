@@ -111,8 +111,32 @@ code, scenes, starred stations — so it should now be a last resort rather than
 ## Target device (verified over ADB, not assumed)
 
 The RayNeo Pocket TV is a rebadged **Homatics / SEI Robotics `SEI700GHMG`** ("XR Theater G"), **Android 12
-(SDK 31)**, Amlogic. The glasses are a dumb 1080p display; the box has no sensors, cameras, or head
-tracking, so nothing AR-shaped is possible by design.
+(SDK 31)**, Amlogic. The glasses are a 1080p display with no camera.
+
+**Correction, measured over ADB: the box DOES have motion sensors.** An earlier version of this file
+said it had none and that "nothing AR-shaped is possible by design" — wrong, and wrong in the
+direction that stops anyone looking:
+
+```
+lsm6dsr_gyro   android.sensor.gyroscope_uncalibrated      6-833 Hz
+lsm6dsr_accel  android.sensor.accelerometer_uncalibrated  1-833 Hz
+feature:android.hardware.sensor.accelerometer
+feature:android.hardware.sensor.gyroscope
+```
+
+That is an **LSM6DSR**, a 6-axis ST IMU, reading live gravity (`0.45, 0.12, 9.69` sitting level).
+Only the *uncalibrated* variants are published, which matters because Chromium's `DeviceMotionEvent`
+normally binds the calibrated ones — so whether the **page** can read them, or whether it needs
+`SensorManager` in the bridge, is a separate question from whether the hardware exists.
+`tilt.html` at the repo root is the probe for exactly that, and it also answers the bigger
+question: **whether the IMU sits in the box or in the glasses** (hold one still, move the other).
+Head tracking is only on the table if it is in the glasses.
+
+**There is no system-level pointer, though.** `getevent -lp` lists only `virtual-search`,
+`cec_input`, `fd650b_indev`, `gpio_keypad`, `vad_keypad` and `input_btrcu` — not one of them
+exposes `REL_X`/`REL_Y` or `BTN_MOUSE`. So the "air mouse" that other apps (e.g. HBrowser) offer is
+something each app builds from these sensors itself. There is no mouse device to inherit: anything
+AMBIENT wants here, it reads and draws itself.
 
 - **ADB**: `adb.exe` at `%LOCALAPPDATA%\Android\platform-tools\adb.exe`. USB debugging is enabled and this
   machine is authorized. Works over the charging/data USB-C port (the other port is DisplayPort-out to the
