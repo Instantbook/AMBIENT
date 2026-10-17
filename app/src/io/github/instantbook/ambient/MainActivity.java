@@ -1687,13 +1687,19 @@ public class MainActivity extends Activity {
         "        n!==document.documentElement;n=n.parentElement)\n" +
         "      fSet(n,'transform:none !important;filter:none !important;'+\n" +
         "        'perspective:none !important;contain:none !important;'+\n" +
-        "        'will-change:auto !important;backdrop-filter:none !important');\n" +
+        "        'will-change:auto !important;backdrop-filter:none !important;'+\n" +
+        "        'transform-style:flat !important;translate:none !important;'+\n" +
+        "        'scale:none !important;rotate:none !important');\n" +
         "    fSet(v,'position:fixed !important;left:0 !important;'+\n" +
         "      'top:0 !important;width:100vw !important;height:100vh !important;'+\n" +
         "      'max-width:none !important;max-height:none !important;'+\n" +
         "      'margin:0 !important;z-index:2147483640 !important;'+\n" +
         "      'object-fit:contain !important;background:#000 !important;'+\n" +
         "      'visibility:visible !important;transform:none !important');\n" +
+        "    var r=v.getBoundingClientRect();\n" +
+        "    if(Math.abs(r.top)>1||Math.abs(r.left)>1){\n" +
+        "      v.style.setProperty('top',(-r.top)+'px','important');\n" +
+        "      v.style.setProperty('left',(-r.left)+'px','important');}\n" +
         "  }catch(_){}\n" +
         "  if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
         "  draw();flash('PLAYER - BACK returns to the page');}\n" +
