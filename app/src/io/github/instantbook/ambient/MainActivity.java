@@ -41,6 +41,10 @@ import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.webkit.WebChromeClient;
 import android.webkit.ConsoleMessage;
 import android.util.Log;
@@ -74,6 +78,76 @@ public class MainActivity extends Activity {
     private static final long EXIT_WINDOW_MS = 2000L;
 
     private static final String TAG = "Ambient";
+
+    /* ---- motion ----
+     * The page cannot reach these itself: this box publishes only the
+     * UNCALIBRATED accelerometer and gyroscope, and Chromium's
+     * DeviceMotionEvent binds the calibrated ones. Confirmed empirically -
+     * a test page saw zero events while a native app's air-mouse worked.
+     *
+     * Polled rather than pushed. Pushing would mean evaluateJavascript
+     * from the sensor callback at 50Hz; the page asks once per animation
+     * frame instead, which is one JNI call a frame.
+     */
+    private SensorManager sensors = null;
+    private Sensor accelSensor = null, gyroSensor = null;
+    private volatile float ax = 0, ay = 0, az = 0;
+    private volatile float gx = 0, gy = 0, gz = 0;
+    private volatile long motionAt = 0;
+    private boolean motionOn = false;
+
+    private final SensorEventListener motionListener =
+            new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent e) {
+            final int t = e.sensor.getType();
+            if (t == Sensor.TYPE_ACCELEROMETER
+                    || t == 35 /* ACCELEROMETER_UNCALIBRATED */) {
+                ax = e.values[0]; ay = e.values[1]; az = e.values[2];
+            } else if (t == Sensor.TYPE_GYROSCOPE
+                    || t == Sensor.TYPE_GYROSCOPE_UNCALIBRATED) {
+                gx = e.values[0]; gy = e.values[1]; gz = e.values[2];
+            }
+            motionAt = System.currentTimeMillis();
+        }
+        @Override
+        public void onAccuracyChanged(Sensor s2, int acc) {}
+    };
+
+    /** Prefer a calibrated sensor; fall back to the uncalibrated one. */
+    private Sensor pickSensor(int calibrated, int uncalibrated) {
+        if (sensors == null) return null;
+        Sensor s2 = sensors.getDefaultSensor(calibrated);
+        if (s2 == null) s2 = sensors.getDefaultSensor(uncalibrated);
+        return s2;
+    }
+
+    private void motionEnable(boolean on) {
+        if (sensors == null) {
+            try {
+                sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
+                accelSensor = pickSensor(Sensor.TYPE_ACCELEROMETER, 35);
+                gyroSensor = pickSensor(Sensor.TYPE_GYROSCOPE,
+                        Sensor.TYPE_GYROSCOPE_UNCALIBRATED);
+            } catch (Throwable t) { return; }
+        }
+        if (on == motionOn) return;
+        try {
+            if (on) {
+                /* GAME is ~50Hz: enough for a cursor, far below the 833Hz
+                   these can do, and the difference is battery. */
+                if (accelSensor != null) sensors.registerListener(
+                        motionListener, accelSensor,
+                        SensorManager.SENSOR_DELAY_GAME);
+                if (gyroSensor != null) sensors.registerListener(
+                        motionListener, gyroSensor,
+                        SensorManager.SENSOR_DELAY_GAME);
+            } else {
+                sensors.unregisterListener(motionListener);
+            }
+            motionOn = on;
+        } catch (Throwable t) { /* leave it off */ }
+    }
     private WebView web;
     private long lastBackAt = 0L;
     private boolean backWasLong = false;
@@ -820,6 +894,42 @@ public class MainActivity extends Activity {
             } finally {
                 try { if (c != null) c.close(); } catch (Throwable ig) {}
             }
+        }
+
+        /** Turn the IMU on or off. Off by default: an always-registered
+         *  50Hz listener is battery spent on a cursor nobody is using. */
+        @JavascriptInterface
+        public boolean motionOn(final boolean on) {
+            runOnUiThread(new Runnable() {
+                public void run() { motionEnable(on); }
+            });
+            return hasMotion();
+        }
+
+        /** Is there anything to read at all? */
+        @JavascriptInterface
+        public boolean hasMotion() {
+            if (sensors == null) {
+                try {
+                    SensorManager sm =
+                            (SensorManager) getSystemService(SENSOR_SERVICE);
+                    if (sm == null) return false;
+                    return sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
+                        || sm.getDefaultSensor(35) != null;
+                } catch (Throwable t) { return false; }
+            }
+            return accelSensor != null || gyroSensor != null;
+        }
+
+        /** One snapshot. The page polls this per animation frame, which is
+         *  one JNI call a frame - unlike a per-ITEM bridge call, which is
+         *  what made MUSIC unusable at 8,000 rows. */
+        @JavascriptInterface
+        public String motion() {
+            return "{\"ax\":" + ax + ",\"ay\":" + ay + ",\"az\":" + az
+                 + ",\"gx\":" + gx + ",\"gy\":" + gy + ",\"gz\":" + gz
+                 + ",\"t\":" + motionAt
+                 + ",\"on\":" + (motionOn ? "true" : "false") + "}";
         }
 
         @JavascriptInterface
@@ -2015,6 +2125,10 @@ public class MainActivity extends Activity {
         // flush now rather than trusting a clean exit - a TV app is usually
         // killed, not closed, and an unflushed login is a lost login
         try { CookieManager.getInstance().flush(); } catch (Throwable ignored) {}
+        /* A sensor listener left registered in the background is pure
+           battery drain on a device that runs off a cell. The page
+           re-enables it when it next wants the cursor. */
+        motionEnable(false);
     }
 
     @Override

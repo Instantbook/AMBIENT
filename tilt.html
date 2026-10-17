@@ -119,6 +119,61 @@
     addEventListener("devicemotion",onMotion);
     addEventListener("deviceorientation",onOrient);
   }
+
+  /* The BRIDGE path. Measured: the web API sees nothing on this box,
+     because only the UNCALIBRATED accelerometer and gyroscope are
+     published and Chromium's DeviceMotionEvent binds the calibrated ones.
+     SensorManager in the wrapper can read them, so the page polls it once
+     per animation frame - one JNI call a frame, not one per sample. */
+  var host=null;
+  try{host=window.AmbientHost||null}catch(e){}
+  var bridgeBox=document.createElement("div");
+  bridgeBox.className="grid";
+  bridgeBox.innerHTML=
+    '<div class="box"><div class="k">BRIDGE (AmbientHost)</div>'+
+    '<div class="v" id="br">—</div></div>'+
+    '<div class="box"><div class="k">BRIDGE accel x y z</div>'+
+    '<div class="v big" id="bacc">—</div></div>'+
+    '<div class="box"><div class="k">BRIDGE gyro x y z</div>'+
+    '<div class="v big" id="bgyr">—</div></div>';
+  document.querySelector("main").insertBefore(bridgeBox,
+    document.getElementById("hint"));
+  var br=document.getElementById("br"),
+      bacc=document.getElementById("bacc"),
+      bgyr=document.getElementById("bgyr");
+
+  if(!host||!host.motion){
+    br.innerHTML='<span class="bad">no bridge</span>';
+    if(host)br.innerHTML+='<br><span class="dim" style="font-size:11px">'+
+      'host present but no motion() - reinstall the APK</span>';
+  }else{
+    var ok2=false;
+    try{ok2=host.motionOn(true)}catch(e){}
+    br.innerHTML=ok2?'<span class="ok">sensors on</span>'
+      :'<span class="bad">no sensors reported</span>';
+    var last=0;
+    (function loop(){
+      try{
+        var m=JSON.parse(host.motion()||"{}");
+        bacc.textContent=f(m.ax)+"  "+f(m.ay)+"  "+f(m.az);
+        bgyr.textContent=f(m.gx)+"  "+f(m.gy)+"  "+f(m.gz);
+        if(m.t&&m.t!==last){last=m.t;n++;}
+        /* Gravity gives an ABSOLUTE tilt. Integrating the gyro would drift
+           within seconds; tilt does not drift at all. */
+        if(m.ax!=null&&m.az!=null){
+          var x=Math.max(0,Math.min(1,0.5-(m.ax/9.81)*0.9));
+          var y=Math.max(0,Math.min(1,0.5+(m.ay/9.81)*0.9));
+          dot.style.left=(x*100)+"%";
+          dot.style.top=(y*100)+"%";
+        }
+      }catch(e){
+        br.innerHTML='<span class="bad">motion() threw: '+
+          String(e).slice(0,40)+'</span>';
+        return;
+      }
+      requestAnimationFrame(loop);
+    })();
+  }
   /* iOS demands a gesture before it will emit these; Android does not, so
      the button only appears where it is actually needed. */
   var needsAsk = (typeof DeviceMotionEvent!=="undefined" &&
