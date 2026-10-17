@@ -1612,6 +1612,27 @@ public class MainActivity extends Activity {
         "    if(/seek|scrub|timeline|progress|playbar|slider/i.test(c))\n" +
         "      return true;}\n" +
         "  return false;}\n" +
+        // Is there a REAL control under the cursor? This has to be
+        // asked before falling back to the timeline, or every button
+        // sharing a player's control bar - play, mute, fullscreen -
+        // is swallowed by the scrub gesture, which is what happened.
+        "function actionable(e){\n" +
+        "  for(var n=e,i=0;n&&i<5;n=n.parentElement,i++){\n" +
+        "    var t=(n.tagName||'').toUpperCase();\n" +
+        "    if(t==='BUTTON'||t==='A'||t==='SELECT'||t==='TEXTAREA'||\n" +
+        "       t==='SUMMARY'||t==='INPUT')return true;\n" +
+        "    var r='';try{r=n.getAttribute('role')||''}catch(_){}\n" +
+        "    if(/button|link|menuitem|tab|checkbox|switch/i.test(r))\n" +
+        "      return true;\n" +
+        "    try{if(n.hasAttribute&&n.hasAttribute('onclick'))\n" +
+        "      return true}catch(_){}\n" +
+        // Players label their controls even when they are bare divs,
+        // so the accessible name is often the only signal there is.
+        "    var al='';try{al=(n.getAttribute('aria-label')||'')+' '+\n" +
+        "      (n.getAttribute('title')||'')}catch(_){}\n" +
+        "    if(/play|pause|mute|volume|full ?screen|caption|next|prev|skip/i.test(al))return true;\n" +
+        "  }\n" +
+        "  return false;}\n" +
         "function pickVideo(){var vs=vids(),best=null,ba=0;\n" +
         "  for(var i=0;i<vs.length;i++){var v=vs[i];\n" +
         "    var r=v.getBoundingClientRect(),a=r.width*r.height;\n" +
@@ -1638,10 +1659,22 @@ public class MainActivity extends Activity {
         // on a seek bar jumps to wherever the cursor happens to be, and
         // being thrown somewhere you did not ask for is a worse start than
         // simply having control from where you are.
-        "  var sv=(h&&sliderish(h))?pickVideo():nearTimeline();\n" +
+        // Order matters: the slider itself is explicit intent to
+        // scrub, a real control is intent to click it, and only bare
+        // space near the bar falls back to taking the timeline.
+        "  var sv=(h&&sliderish(h))?pickVideo()\n" +
+        "    :((h&&actionable(h))?null:nearTimeline());\n" +
         "  if(sv&&isFinite(sv.duration)&&sv.duration>0){\n" +
         "    startScrub(sv);return true;}\n" +
         "  if(!h)return false;\n" +
+        // A bare <video> with no control under the pointer: play or
+        // pause is the only thing a click can sensibly mean. A player
+        // with its own buttons is caught by actionable() above.
+        "  if((h.tagName||'').toUpperCase()==='VIDEO'){\n" +
+        "    try{if(h.paused){h.play();flash('PLAY')}\n" +
+        "        else{h.pause();flash('PAUSE')}\n" +
+        "    return true;}catch(_){}\n" +
+        "  }\n" +
         "  try{h.focus({preventScroll:true})}catch(_){}\n" +
         "  fire(h,'pointerdown',cx,cy);fire(h,'mousedown',cx,cy);\n" +
         "  fire(h,'pointerup',cx,cy);fire(h,'mouseup',cx,cy);\n" +
