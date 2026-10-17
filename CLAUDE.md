@@ -156,6 +156,50 @@ AMBIENT wants here, it reads and draws itself.
 - **Verified working on hardware**: every card. Radio and local music both play with a real FFT driving the
   visualiser, headlines and Greek stations come through the deployed Worker, and the companion relay pairs.
 
+### The box boots in 2024, and TLS cannot work until NTP lands
+
+**"Limited or no internet" on this device usually means the clock, not the network.** The box has no
+RTC battery, so it powers on believing it is **2024-05-22** — a firmware-baked date — and until NTP
+corrects it **every TLS handshake fails**, because certificates issued in the real year are "not yet
+valid" to a device living two years in the past.
+
+Caught in `dumpsys network_stack`, where the log timestamp and the server's own `Date` header
+disagree by 2.4 years:
+
+```
+2024-05-22T06:37:18  PROBE_HTTP   http://connectivitycheck.gstatic.com/generate_204  ret=204
+2024-05-22T06:37:18  PROBE_HTTPS  https://www.google.com/generate_204
+                     SSLHandshakeException: Chain validation failed
+2024-05-22T06:37:18  PROBE_FALLBACK http://play.googleapis.com/generate_204          ret=204
+                     ...Date=[Sat, 17 Oct 2026 04:53:30 GMT]
+```
+
+Every **HTTP** probe passes and every **HTTPS** probe fails. Android's connectivity check needs the
+HTTPS one, so it flags the network limited — **on every SSID, including a phone hotspot**, which is
+the tell that it is not the WiFi. `ping` and DNS work throughout, which is what makes it so
+misleading.
+
+What this explains, and all of it was chased elsewhere first:
+
+- **`location.assign()` to an https URL silently doing nothing.** The TLS handshake fails, the
+  service worker's `caches.match(...) || fetch(...)` rejects, and a rejected `respondWith` makes the
+  navigation fail with no error anywhere. LAUNCH looked broken; it was not.
+- **AMBIENT itself still running perfectly** while everything new failed — it is served from the
+  service-worker cache and needs no network at all. A healthy-looking app is not evidence of a
+  healthy network here.
+- Sporadic "Failed to fetch" across cards after a cold boot.
+
+`auto_time` is `1`, so it self-heals once NTP replies; the window is however long that takes.
+`ntp_server` was `null` (default `time.android.com`) and is now pinned:
+
+```
+settings put global ntp_server time.google.com     # revert: settings delete global ntp_server
+```
+
+**Diagnosis order for any "no internet" report on this box:** compare `adb shell date -u` against
+real time FIRST, then read `dumpsys network_stack | grep PROBE_`. If HTTP passes and HTTPS fails on
+chain validation, it is the clock and it will clear itself. Do not restart the router.
+
 ### The battery is not where Android keeps batteries
 
 **Every standard battery API returns placeholders on this box.** Verified over ADB:
