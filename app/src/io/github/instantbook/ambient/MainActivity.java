@@ -1510,7 +1510,7 @@ public class MainActivity extends Activity {
         // angle straight to position would mean the cursor slides away
         // the moment you rest the box.
         "var mLoop=0,bx=0,by=0,bz=0,fx=0,fy=0,fz=0;\n" +
-        "var gsx=0,gsy=0,gsz=0,yawA=0,pit0=0,capt=0,t0=0;\n" +
+        "var gsx=0,gsy=0,gsz=0,yawA=0,pit0=0,capt=0,t0=0,still=0;\n" +
         "function mRead(){try{\n" +
         "  if(!window.AmbientHost||!AmbientHost.motion)return null;\n" +
         "  return JSON.parse(AmbientHost.motion()||'null');\n" +
@@ -1524,7 +1524,7 @@ public class MainActivity extends Activity {
         "  try{if(!window.AmbientHost||!AmbientHost.motionOn)return;\n" +
         "    if(!AmbientHost.motionOn(true))return;}catch(_){return}\n" +
         "  capt=0;t0=0;\n" +
-        "  var SX=1,SY=1,PPR=1375,DZ=0.09;\n" +
+        "  var SX=1,SY=1,PPR=1375,DZ=0.03;\n" +
         "  var step=function(){\n" +
         "    mLoop=0;\n" +
         "    if(!curMode){mStop();return}\n" +
@@ -1552,11 +1552,11 @@ public class MainActivity extends Activity {
         "      }else{\n" +
         "        var wx=m.gx-bx,wy=m.gy-by,wz=m.gz-bz;\n" +
         "        var mag=Math.abs(wx)+Math.abs(wy)+Math.abs(wz);\n" +
-        "        if(mag<0.30){bx+=(m.gx-bx)*0.03;\n" +
-        "          by+=(m.gy-by)*0.03;bz+=(m.gz-bz)*0.03;}\n" +
+        "        if(mag<0.14)still++;else still=0;\n" +
+        "        if(still>20){bx+=(m.gx-bx)*0.004;\n" +
+        "          by+=(m.gy-by)*0.004;bz+=(m.gz-bz)*0.004;}\n" +
         "        var yr=wx*gX+wy*gY+wz*gZ;\n" +
-        "        if(yr>DZ)yawA+=(yr-DZ)*dt;\n" +
-        "        else if(yr<-DZ)yawA+=(yr+DZ)*dt;\n" +
+        "        if(yr>DZ||yr<-DZ)yawA+=yr*dt;\n" +
         "        var pit=Math.asin(Math.max(-1,Math.min(1,\n" +
         "          fx*gX+fy*gY+fz*gZ)));\n" +
         "        var nx=innerWidth/2+SX*yawA*PPR;\n" +
