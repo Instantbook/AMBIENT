@@ -35,7 +35,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.RandomAccessFile;
 import android.webkit.WebResourceRequest;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
@@ -165,6 +167,9 @@ public class MainActivity extends Activity {
     private WebView web;
     private long lastBackAt = 0L;
     private boolean backWasLong = false;
+    /** When OK was last pressed on the remote. tapAt() is gated on it,
+     *  so a page cannot synthesise trusted touches on itself. */
+    private volatile long okKeyAt = 0;
 
     /**
      * Bridge for the things a web page cannot see: the device's memory and
@@ -910,6 +915,27 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** A REAL touch at physical pixel (x, y) - trusted by the page,
+         *  hit-tested by the browser, delivered into cross-origin frames.
+         *  Only honoured just after the user pressed OK. */
+        @JavascriptInterface
+        public boolean tapAt(final float x, final float y) {
+            if (SystemClock.uptimeMillis() - okKeyAt > 1500) return false;
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    final long t = SystemClock.uptimeMillis();
+                    touch(t, t, MotionEvent.ACTION_DOWN, x, y);
+                    web.postDelayed(new Runnable() {
+                        public void run() {
+                            touch(t, SystemClock.uptimeMillis(),
+                                    MotionEvent.ACTION_UP, x, y);
+                        }
+                    }, 60);
+                }
+            });
+            return true;
+        }
+
         /** Turn the IMU on or off. Off by default: an always-registered
          *  50Hz listener is battery spent on a cursor nobody is using. */
         @JavascriptInterface
@@ -1653,6 +1679,11 @@ public class MainActivity extends Activity {
         "        else{h.pause();flash('PAUSE')}\n" +
         "    return true;}catch(_){}\n" +
         "  }\n" +
+        "  try{if(window.AmbientHost&&AmbientHost.tapAt){\n" +
+        "    var vv=window.visualViewport,dpr=window.devicePixelRatio||1;\n" +
+        "    var sc=vv?vv.scale:1,ox=vv?vv.offsetLeft:0,oy=vv?vv.offsetTop:0;\n" +
+        "    if(AmbientHost.tapAt((cx-ox)*sc*dpr,(cy-oy)*sc*dpr))return true;}\n" +
+        "  }catch(_){}\n" +
         "  try{h.focus({preventScroll:true})}catch(_){}\n" +
         "  fire(h,'pointerdown',cx,cy);fire(h,'mousedown',cx,cy);\n" +
         "  fire(h,'pointerup',cx,cy);fire(h,'mouseup',cx,cy);\n" +
@@ -2381,6 +2412,30 @@ public class MainActivity extends Activity {
             return true;
         }
         return super.onKeyLongPress(keyCode, event);
+    }
+
+    private void touch(long down, long at, int action, float x, float y) {
+        MotionEvent.PointerProperties[] pp =
+                { new MotionEvent.PointerProperties() };
+        pp[0].id = 0;
+        pp[0].toolType = MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords[] pc = { new MotionEvent.PointerCoords() };
+        pc[0].x = x; pc[0].y = y; pc[0].pressure = 1f; pc[0].size = 1f;
+        MotionEvent e = MotionEvent.obtain(down, at, action, 1, pp, pc,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
+        try { web.dispatchTouchEvent(e); } finally { e.recycle(); }
+    }
+
+    /** Every key passes through here first - including DPAD_CENTER, which
+     *  the WebView consumes before onKeyDown would ever see it. */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent ev) {
+        int k = ev.getKeyCode();
+        if (k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER
+                || k == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            okKeyAt = SystemClock.uptimeMillis();
+        }
+        return super.dispatchKeyEvent(ev);
     }
 
     private void siteBack(boolean quick) {
