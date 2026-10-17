@@ -1474,7 +1474,7 @@ public class MainActivity extends Activity {
         "      'box-shadow:0 0 0 1px #000,0 0 8px #000;pointer-events:none';\n" +
         "    document.documentElement.appendChild(dot);}\n" +
         "  dot.style.left=cx+'px';dot.style.top=cy+'px';\n" +
-        "  dot.style.display=curMode?'block':'none';}\n" +
+        "  dot.style.display=(curMode&&!focusV)?'block':'none';}\n" +
         // Hover is the whole reason this mode earns its place: a menu that
         // only opens on mouseover is unreachable by any other means here.
         "function hover(){var h=null;\n" +
@@ -1672,6 +1672,58 @@ public class MainActivity extends Activity {
         "    if(scrub){scrub=null;bar().style.display='none';}}\n" +
         "  draw();flash(curMode?'CURSOR':'HIGHLIGHT');\n" +
         "  return true;};\n" +
+        "var focusV=null,fSaved=[],fScroll=0,lastOk=0,loadAt=Date.now(),fbT=0;\n" +
+        "function fSet(el,css){fSaved.push([el,el.getAttribute('style')]);\n" +
+        "  el.style.cssText+=';'+css;}\n" +
+        "function enterFocus(v){\n" +
+        "  if(focusV||!v||!v.isConnected)return;\n" +
+        "  focusV=v;fSaved=[];fScroll=window.scrollY||0;\n" +
+        "  try{\n" +
+        "    fSet(document.documentElement,'background:#000 !important;'+\n" +
+        "      'overflow:hidden !important');\n" +
+        "    fSet(document.body,'visibility:hidden !important;'+\n" +
+        "      'overflow:hidden !important;background:#000 !important');\n" +
+        "    for(var n=v.parentElement;n&&n!==document.body&&\n" +
+        "        n!==document.documentElement;n=n.parentElement)\n" +
+        "      fSet(n,'transform:none !important;filter:none !important;'+\n" +
+        "        'perspective:none !important;contain:none !important;'+\n" +
+        "        'will-change:auto !important;backdrop-filter:none !important');\n" +
+        "    fSet(v,'position:fixed !important;left:0 !important;'+\n" +
+        "      'top:0 !important;width:100vw !important;height:100vh !important;'+\n" +
+        "      'max-width:none !important;max-height:none !important;'+\n" +
+        "      'margin:0 !important;z-index:2147483640 !important;'+\n" +
+        "      'object-fit:contain !important;background:#000 !important;'+\n" +
+        "      'visibility:visible !important;transform:none !important');\n" +
+        "  }catch(_){}\n" +
+        "  if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
+        "  draw();flash('PLAYER - BACK returns to the page');}\n" +
+        "function exitFocus(){\n" +
+        "  if(!focusV)return false;\n" +
+        "  for(var i=fSaved.length-1;i>=0;i--){var e=fSaved[i][0],st=fSaved[i][1];\n" +
+        "    try{if(st===null)e.removeAttribute('style');\n" +
+        "      else e.setAttribute('style',st)}catch(_){}}\n" +
+        "  fSaved=[];focusV=null;scrub=null;bar().style.display='none';\n" +
+        "  try{scrollTo(0,fScroll)}catch(_){}\n" +
+        "  draw();flash('PAGE');return true;}\n" +
+        "window.__ambientBack=function(){return exitFocus();};\n" +
+        "document.addEventListener('playing',function(e){var v=e.target;\n" +
+        "  if(focusV||!v||(v.tagName||'').toUpperCase()!=='VIDEO')return;\n" +
+        "  var now=Date.now();\n" +
+        "  if(now-lastOk>3000&&now-loadAt>10000)return;\n" +
+        "  if(v.muted)return;\n" +
+        "  var r=v.getBoundingClientRect();\n" +
+        "  if(r.width<innerWidth*0.3)return;\n" +
+        "  enterFocus(v);},true);\n" +
+        "function focusKey(k,d,rep){\n" +
+        "  if(k==='Enter'){if(!rep){try{\n" +
+        "    if(focusV.paused){focusV.play();flash('PLAY')}\n" +
+        "    else{focusV.pause();flash('PAUSE')}}catch(_){}}\n" +
+        "    return;}\n" +
+        "  var dd=d==='left'?-10:d==='right'?10:d==='up'?60:-60;\n" +
+        "  if(rep&&(d==='left'||d==='right'))dd*=3;\n" +
+        "  scrub=focusV;seek(dd);clearTimeout(fbT);\n" +
+        "  fbT=setTimeout(function(){if(focusV){scrub=null;\n" +
+        "    bar().style.display='none'}},2500);}\n" +
         "document.addEventListener('keyup',function(ev){\n" +
         "  if(ev.key!=='Enter'||!okDown)return;\n" +
         "  okDown=false;clearTimeout(okT);\n" +
@@ -1683,6 +1735,10 @@ public class MainActivity extends Activity {
         "  if(k==='ArrowRight')d='right';else if(k==='ArrowLeft')d='left';\n" +
         "  else if(k==='ArrowDown')d='down';else if(k==='ArrowUp')d='up';\n" +
         "  if(!d&&k!=='Enter')return;\n" +
+        "  if(k==='Enter'&&!ev.repeat)lastOk=Date.now();\n" +
+        "  if(focusV&&!focusV.isConnected)exitFocus();\n" +
+        "  if(focusV&&!typing()){focusKey(k,d,ev.repeat===true);\n" +
+        "    ev.preventDefault();ev.stopPropagation();return;}\n" +
         "  if(curMode&&!typing()){\n" +
         "    if(scrub){\n" +
         "      if(d==='left')seek(ev.repeat?-30:-10);\n" +
@@ -2321,6 +2377,18 @@ public class MainActivity extends Activity {
         return super.onKeyLongPress(keyCode, event);
     }
 
+    private void siteBack(boolean quick) {
+        if (quick) {                 // impatient: go straight home
+            web.loadUrl(URL);
+        } else if (web.canGoBack()) {
+            web.goBack();
+            Toast.makeText(this, "Press BACK again for AMBIENT",
+                    Toast.LENGTH_SHORT).show();
+        } else {
+            web.loadUrl(URL);
+        }
+    }
+
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
@@ -2333,15 +2401,18 @@ public class MainActivity extends Activity {
             lastBackAt = now;
 
             if (!atHome()) {
-                if (quick) {                 // impatient: go straight home
-                    web.loadUrl(URL);
-                } else if (web.canGoBack()) {
-                    web.goBack();
-                    Toast.makeText(this, "Press BACK again for AMBIENT",
-                            Toast.LENGTH_SHORT).show();
-                } else {
-                    web.loadUrl(URL);
-                }
+                /* The page answers first: a video in player mode climbs
+                   back to its page, and that must not count toward the
+                   quick double-press that goes straight home. */
+                final boolean q = quick;
+                web.evaluateJavascript(
+                        "(window.__ambientBack&&window.__ambientBack())?1:0",
+                        new android.webkit.ValueCallback<String>() {
+                            @Override public void onReceiveValue(String r) {
+                                if ("1".equals(r)) lastBackAt = 0;
+                                else siteBack(q);
+                            }
+                        });
                 return true;
             }
 
