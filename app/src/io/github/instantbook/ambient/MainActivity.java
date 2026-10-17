@@ -1509,8 +1509,8 @@ public class MainActivity extends Activity {
         // Tilt sets VELOCITY so that level means stationary - mapping
         // angle straight to position would mean the cursor slides away
         // the moment you rest the box.
-        "var mLoop=0,bx=0,by=0,bz=0,fx=0,fy=0,fz=0;\n" +
-        "var gsx=0,gsy=0,gsz=0,yawA=0,pit0=0,capt=0,t0=0,still=0;\n" +
+        "var mLoop=0,bx=0,by=0,bz=0,g0x=0,g0y=0,g0z=1;\n" +
+        "var gsx=0,gsy=0,gsz=0,thX=0,thY=0,capt=0,t0=0,still=0;\n" +
         "function mRead(){try{\n" +
         "  if(!window.AmbientHost||!AmbientHost.motion)return null;\n" +
         "  return JSON.parse(AmbientHost.motion()||'null');\n" +
@@ -1524,7 +1524,9 @@ public class MainActivity extends Activity {
         "  try{if(!window.AmbientHost||!AmbientHost.motionOn)return;\n" +
         "    if(!AmbientHost.motionOn(true))return;}catch(_){return}\n" +
         "  capt=0;t0=0;\n" +
-        "  var SX=1,SY=1,PPR=1375,DZ=0.03;\n" +
+        "  var SX=1,SY=1,PPR=1375,DZ=0.03,CK=0.02;\n" +
+        "  var wr=function(a){while(a>Math.PI)a-=2*Math.PI;\n" +
+        "    while(a<-Math.PI)a+=2*Math.PI;return a};\n" +
         "  var step=function(){\n" +
         "    mLoop=0;\n" +
         "    if(!curMode){mStop();return}\n" +
@@ -1540,14 +1542,7 @@ public class MainActivity extends Activity {
         "      var gl=Math.sqrt(gsx*gsx+gsy*gsy+gsz*gsz)||1;\n" +
         "      var gX=gsx/gl,gY=gsy/gl,gZ=gsz/gl;\n" +
         "      if(!capt){\n" +
-        "        var gs=[Math.abs(gX),Math.abs(gY),Math.abs(gZ)];\n" +
-        "        var bi=0;\n" +
-        "        if(gs[1]<gs[bi])bi=1;\n" +
-        "        if(gs[2]<gs[bi])bi=2;\n" +
-        "        fx=bi===0?1:0;fy=bi===1?1:0;fz=bi===2?1:0;\n" +
-        "        pit0=Math.asin(Math.max(-1,Math.min(1,\n" +
-        "          fx*gX+fy*gY+fz*gZ)));\n" +
-        "        yawA=0;capt=1;\n" +
+        "        g0x=gX;g0y=gY;g0z=gZ;thX=0;thY=0;still=0;capt=1;\n" +
         "        cx=innerWidth/2;cy=innerHeight/2;draw();hover();\n" +
         "      }else{\n" +
         "        var wx=m.gx-bx,wy=m.gy-by,wz=m.gz-bz;\n" +
@@ -1555,12 +1550,16 @@ public class MainActivity extends Activity {
         "        if(mag<0.14)still++;else still=0;\n" +
         "        if(still>20){bx+=(m.gx-bx)*0.004;\n" +
         "          by+=(m.gy-by)*0.004;bz+=(m.gz-bz)*0.004;}\n" +
-        "        var yr=wx*gX+wy*gY+wz*gZ;\n" +
-        "        if(yr>DZ||yr<-DZ)yawA+=yr*dt;\n" +
-        "        var pit=Math.asin(Math.max(-1,Math.min(1,\n" +
-        "          fx*gX+fy*gY+fz*gZ)));\n" +
-        "        var nx=innerWidth/2+SX*yawA*PPR;\n" +
-        "        var ny=innerHeight/2+SY*(pit-pit0)*PPR;\n" +
+        "        if(wx>DZ||wx<-DZ)thX+=wx*dt;\n" +
+        "        if(wy>DZ||wy<-DZ)thY+=wy*dt;\n" +
+        "        var pX=gY*gY+gZ*gZ,qX=g0y*g0y+g0z*g0z;\n" +
+        "        if(pX>0.25&&qX>0.25)thX+=(wr(Math.atan2(gY,gZ)-\n" +
+        "          Math.atan2(g0y,g0z))-thX)*CK*pX;\n" +
+        "        var pY=gX*gX+gZ*gZ,qY=g0x*g0x+g0z*g0z;\n" +
+        "        if(pY>0.25&&qY>0.25)thY+=(wr(Math.atan2(g0x,g0z)-\n" +
+        "          Math.atan2(gX,gZ))-thY)*CK*pY;\n" +
+        "        var nx=innerWidth/2+SX*thY*PPR;\n" +
+        "        var ny=innerHeight/2-SY*thX*PPR;\n" +
         "        if(ny<2&&canScroll(-1)){try{scrollBy(0,-14)}catch(_){}}\n" +
         "        if(ny>innerHeight-2&&canScroll(1)){\n" +
         "          try{scrollBy(0,14)}catch(_){}}\n" +
