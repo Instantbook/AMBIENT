@@ -1507,7 +1507,8 @@ public class MainActivity extends Activity {
         "  if(mLoop)return;\n" +
         "  try{if(!window.AmbientHost||!AmbientHost.motionOn)return;\n" +
         "    if(!AmbientHost.motionOn(true))return;}catch(_){return}\n" +
-        "  var SX=-1,SY=-1,SPD=170,DZ=0.015,MAXV=34;\n" +
+        "  var SX=-1,SY=-1,SPD=1300,EXP=1.3,DZ=0.02,MAXV=1500;\n" +
+        "  var svx=0,svy=0,t0=0;\n" +
         "  var step=function(){\n" +
         "    mLoop=0;\n" +
         "    if(!curMode){mStop();return}\n" +
@@ -1535,13 +1536,20 @@ public class MainActivity extends Activity {
         "      var yaw=wx*gX+wy*gY+wz*gZ;\n" +
         "      var pit=wx*rX+wy*rY+wz*rZ;\n" +
         "      var f=function(d){\n" +
-        "        if(d>DZ)return (d-DZ);\n" +
-        "        if(d<-DZ)return (d+DZ);\n" +
-        "        return 0;};\n" +
-        "      var vx=f(yaw)*SPD*SX,vy=f(pit)*SPD*SY;\n" +
-        "      if(vx>MAXV)vx=MAXV;if(vx<-MAXV)vx=-MAXV;\n" +
-        "      if(vy>MAXV)vy=MAXV;if(vy<-MAXV)vy=-MAXV;\n" +
-        "      if(vx||vy){\n" +
+        "        var a=Math.abs(d);\n" +
+        "        if(a<=DZ)return 0;\n" +
+        "        var u=Math.pow(a-DZ,EXP);\n" +
+        "        return d>0?u:-u;};\n" +
+        "      var now=(window.performance&&performance.now)\n" +
+        "        ?performance.now():Date.now();\n" +
+        "      var dt=t0?Math.min(0.05,(now-t0)/1000):0.016;\n" +
+        "      t0=now;\n" +
+        "      var tx=f(yaw)*SPD*SX,ty=f(pit)*SPD*SY;\n" +
+        "      if(tx>MAXV)tx=MAXV;if(tx<-MAXV)tx=-MAXV;\n" +
+        "      if(ty>MAXV)ty=MAXV;if(ty<-MAXV)ty=-MAXV;\n" +
+        "      svx+=(tx-svx)*0.35;svy+=(ty-svy)*0.35;\n" +
+        "      var vx=svx*dt,vy=svy*dt;\n" +
+        "      if(Math.abs(vx)>0.2||Math.abs(vy)>0.2){\n" +
         "        cx=Math.max(2,Math.min(innerWidth-2,cx+vx));\n" +
         "        cy=Math.max(2,Math.min(innerHeight-2,cy+vy));\n" +
         "        if(cy<=2&&vy<0&&canScroll(-1)){\n" +
