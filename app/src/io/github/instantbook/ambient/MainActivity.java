@@ -1509,76 +1509,73 @@ public class MainActivity extends Activity {
         // Tilt sets VELOCITY so that level means stationary - mapping
         // angle straight to position would mean the cursor slides away
         // the moment you rest the box.
-        "var mLoop=0,bx=0,by=0,bz=0,bN=0,fAx=-1;\n" +
+        "var mLoop=0,bx=0,by=0,bz=0,fx=0,fy=0,fz=0;\n" +
+        "var gsx=0,gsy=0,gsz=0,yawA=0,pit0=0,capt=0,t0=0;\n" +
         "function mRead(){try{\n" +
         "  if(!window.AmbientHost||!AmbientHost.motion)return null;\n" +
         "  return JSON.parse(AmbientHost.motion()||'null');\n" +
         "}catch(_){return null}}\n" +
         "function mStop(){if(mLoop)cancelAnimationFrame(mLoop);mLoop=0;\n" +
+        "  capt=0;\n" +
         "  try{if(window.AmbientHost&&AmbientHost.motionOn)\n" +
         "    AmbientHost.motionOn(false)}catch(_){}}\n" +
         "function mStart(){\n" +
         "  if(mLoop)return;\n" +
         "  try{if(!window.AmbientHost||!AmbientHost.motionOn)return;\n" +
         "    if(!AmbientHost.motionOn(true))return;}catch(_){return}\n" +
-        "  var SX=-1,SY=-1,SPD=1500,EXP=1.3,DZ=0.09,MAXV=1500;\n" +
-        "  var svx=0,svy=0,t0=0;\n" +
+        "  capt=0;t0=0;\n" +
+        "  var SX=1,SY=1,PPR=1375,DZ=0.09;\n" +
         "  var step=function(){\n" +
         "    mLoop=0;\n" +
         "    if(!curMode){mStop();return}\n" +
         "    var m=mRead();\n" +
         "    if(m&&m.on&&m.gx!=null){\n" +
-        "      var mag=Math.abs(m.gx-bx)+Math.abs(m.gy-by)+\n" +
-        "        Math.abs(m.gz-bz);\n" +
-        "      if(mag<0.30){\n" +
-        "        bx+=(m.gx-bx)*0.03;by+=(m.gy-by)*0.03;\n" +
-        "        bz+=(m.gz-bz)*0.03;\n" +
-        "      }\n" +
-        "      var wx=m.gx-bx,wy=m.gy-by,wz=m.gz-bz;\n" +
-        "      var ax=m.ax,ay=m.ay,az=m.az;\n" +
-        "      var gl=Math.sqrt(ax*ax+ay*ay+az*az)||1;\n" +
-        "      var gX=ax/gl,gY=ay/gl,gZ=az/gl;\n" +
-        "      var gs=[Math.abs(gX),Math.abs(gY),Math.abs(gZ)];\n" +
-        "      var bi=0;\n" +
-        "      if(gs[1]<gs[bi])bi=1;\n" +
-        "      if(gs[2]<gs[bi])bi=2;\n" +
-        "      if(fAx<0||gs[bi]<gs[fAx]-0.15)fAx=bi;\n" +
-        "      var fX=fAx===0?1:0,fY=fAx===1?1:0,fZ=fAx===2?1:0;\n" +
-        "      var rX=fY*gZ-fZ*gY,rY=fZ*gX-fX*gZ,rZ=fX*gY-fY*gX;\n" +
-        "      var rl=Math.sqrt(rX*rX+rY*rY+rZ*rZ)||1;\n" +
-        "      rX/=rl;rY/=rl;rZ/=rl;\n" +
-        "      var yaw=wx*gX+wy*gY+wz*gZ;\n" +
-        "      var pit=wx*rX+wy*rY+wz*rZ;\n" +
-        "      var f=function(d){\n" +
-        "        var a=Math.abs(d);\n" +
-        "        if(a<=DZ)return 0;\n" +
-        "        var u=Math.pow(a-DZ,EXP);\n" +
-        "        return d>0?u:-u;};\n" +
         "      var now=(window.performance&&performance.now)\n" +
         "        ?performance.now():Date.now();\n" +
         "      var dt=t0?Math.min(0.05,(now-t0)/1000):0.016;\n" +
         "      t0=now;\n" +
-        "      var tx=f(yaw)*SPD*SX,ty=f(pit)*SPD*SY;\n" +
-        "      if(tx>MAXV)tx=MAXV;if(tx<-MAXV)tx=-MAXV;\n" +
-        "      if(ty>MAXV)ty=MAXV;if(ty<-MAXV)ty=-MAXV;\n" +
-        "      svx+=(tx-svx)*0.35;svy+=(ty-svy)*0.35;\n" +
-        "      var vx=svx*dt,vy=svy*dt;\n" +
-        "      if(Math.abs(vx)>0.2||Math.abs(vy)>0.2){\n" +
-        "        cx=Math.max(2,Math.min(innerWidth-2,cx+vx));\n" +
-        "        cy=Math.max(2,Math.min(innerHeight-2,cy+vy));\n" +
-        "        if(cy<=2&&vy<0&&canScroll(-1)){\n" +
-        "          try{scrollBy(0,-18)}catch(_){}}\n" +
-        "        if(cy>=innerHeight-2&&vy>0&&canScroll(1)){\n" +
-        "          try{scrollBy(0,18)}catch(_){}}\n" +
-        "        draw();hover();\n" +
+        "      if(!capt){gsx=m.ax;gsy=m.ay;gsz=m.az;}\n" +
+        "      else{gsx+=(m.ax-gsx)*0.12;gsy+=(m.ay-gsy)*0.12;\n" +
+        "        gsz+=(m.az-gsz)*0.12;}\n" +
+        "      var gl=Math.sqrt(gsx*gsx+gsy*gsy+gsz*gsz)||1;\n" +
+        "      var gX=gsx/gl,gY=gsy/gl,gZ=gsz/gl;\n" +
+        "      if(!capt){\n" +
+        "        var gs=[Math.abs(gX),Math.abs(gY),Math.abs(gZ)];\n" +
+        "        var bi=0;\n" +
+        "        if(gs[1]<gs[bi])bi=1;\n" +
+        "        if(gs[2]<gs[bi])bi=2;\n" +
+        "        fx=bi===0?1:0;fy=bi===1?1:0;fz=bi===2?1:0;\n" +
+        "        pit0=Math.asin(Math.max(-1,Math.min(1,\n" +
+        "          fx*gX+fy*gY+fz*gZ)));\n" +
+        "        yawA=0;capt=1;\n" +
+        "        cx=innerWidth/2;cy=innerHeight/2;draw();hover();\n" +
+        "      }else{\n" +
+        "        var wx=m.gx-bx,wy=m.gy-by,wz=m.gz-bz;\n" +
+        "        var mag=Math.abs(wx)+Math.abs(wy)+Math.abs(wz);\n" +
+        "        if(mag<0.30){bx+=(m.gx-bx)*0.03;\n" +
+        "          by+=(m.gy-by)*0.03;bz+=(m.gz-bz)*0.03;}\n" +
+        "        var yr=wx*gX+wy*gY+wz*gZ;\n" +
+        "        if(yr>DZ)yawA+=(yr-DZ)*dt;\n" +
+        "        else if(yr<-DZ)yawA+=(yr+DZ)*dt;\n" +
+        "        var pit=Math.asin(Math.max(-1,Math.min(1,\n" +
+        "          fx*gX+fy*gY+fz*gZ)));\n" +
+        "        var nx=innerWidth/2+SX*yawA*PPR;\n" +
+        "        var ny=innerHeight/2+SY*(pit-pit0)*PPR;\n" +
+        "        if(ny<2&&canScroll(-1)){try{scrollBy(0,-14)}catch(_){}}\n" +
+        "        if(ny>innerHeight-2&&canScroll(1)){\n" +
+        "          try{scrollBy(0,14)}catch(_){}}\n" +
+        "        nx=Math.max(2,Math.min(innerWidth-2,nx));\n" +
+        "        ny=Math.max(2,Math.min(innerHeight-2,ny));\n" +
+        "        if(Math.abs(nx-cx)>0.4||Math.abs(ny-cy)>0.4){\n" +
+        "          cx=nx;cy=ny;draw();hover();}\n" +
         "      }\n" +
         "    }\n" +
         "    mLoop=requestAnimationFrame(step);\n" +
         "  };\n" +
         "  mLoop=requestAnimationFrame(step);\n" +
         "}\n" +
-        "window.__ambientLevel=function(){bN=0;\n" +
-        "  flash('RE-ZEROED');return true;};\n" +
+        "window.__ambientLevel=function(){capt=0;\n" +
+        "  flash('CENTRED');return true;};\n" +
         "function nudge(dir,fast){var step=fast?54:16;\n" +
         "  if(dir==='left')cx=Math.max(2,cx-step);\n" +
         "  else if(dir==='right')cx=Math.min(innerWidth-2,cx+step);\n" +
