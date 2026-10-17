@@ -1480,6 +1480,71 @@ public class MainActivity extends Activity {
         // edge with nowhere further to go, so a long page is still
         // reachable without leaving the mode - the press that would have
         // moved past the edge scrolls instead.
+        // ---- air mouse ----
+        // The box has an IMU (LSM6DSR) and the page cannot read it: only
+        // the UNCALIBRATED sensor types are published and Chromium's
+        // DeviceMotionEvent binds the calibrated ones. The bridge reads
+        // them with SensorManager, so this polls AmbientHost once per
+        // animation frame - one JNI call a frame, not one per sample.
+        //
+        // Gravity, not gyro: an integrated rate drifts within seconds,
+        // while an accelerometer's angle is absolute and stays put.
+        // Tilt sets VELOCITY so that level means stationary - mapping
+        // angle straight to position would mean the cursor slides away
+        // the moment you rest the box.
+        "var mN=null,mLoop=0;\n" +
+        "function mRead(){try{\n" +
+        "  if(!window.AmbientHost||!AmbientHost.motion)return null;\n" +
+        "  return JSON.parse(AmbientHost.motion()||'null');\n" +
+        "}catch(_){return null}}\n" +
+        "function mStop(){if(mLoop)cancelAnimationFrame(mLoop);mLoop=0;\n" +
+        "  mN=null;\n" +
+        "  try{if(window.AmbientHost&&AmbientHost.motionOn)\n" +
+        "    AmbientHost.motionOn(false)}catch(_){}}\n" +
+        "function mStart(){\n" +
+        "  if(mLoop)return;\n" +
+        "  try{if(!window.AmbientHost||!AmbientHost.motionOn)return;\n" +
+        "    if(!AmbientHost.motionOn(true))return;}catch(_){return}\n" +
+        "  mN=null;\n" +
+        // SX/SY are the axis signs and SPD the gain. The board's
+        // orientation inside the case is not something to infer, so they
+        // live here together, ready to flip after one real test.
+        "  var SX=-1,SY=1,DZ=0.55,SPD=2.6,MAXV=26;\n" +
+        "  var step=function(){\n" +
+        "    mLoop=0;\n" +
+        "    if(!curMode){mStop();return}\n" +
+        "    var m=mRead();\n" +
+        "    if(m&&m.ax!=null&&m.on){\n" +
+        // Neutral is wherever it was being held when the mode came on,
+        // because nobody holds a handheld box level.
+        "      if(!mN)mN={x:m.ax,y:m.ay};\n" +
+        "      var dx=m.ax-mN.x,dy=m.ay-mN.y;\n" +
+        "      var f=function(d){\n" +
+        "        if(d>DZ)return (d-DZ)*SPD;\n" +
+        "        if(d<-DZ)return (d+DZ)*SPD;\n" +
+        "        return 0;};\n" +
+        "      var vx=f(dx)*SX,vy=f(dy)*SY;\n" +
+        "      if(vx>MAXV)vx=MAXV;if(vx<-MAXV)vx=-MAXV;\n" +
+        "      if(vy>MAXV)vy=MAXV;if(vy<-MAXV)vy=-MAXV;\n" +
+        "      if(vx||vy){\n" +
+        "        cx=Math.max(2,Math.min(innerWidth-2,cx+vx));\n" +
+        "        cy=Math.max(2,Math.min(innerHeight-2,cy+vy));\n" +
+        // At an edge with nowhere to go, scroll instead - the same rule
+        // the d-pad uses, so a long page stays reachable by tilt alone.
+        "        if(cy<=2&&vy<0&&canScroll(-1)){try{scrollBy(0,-18)}catch(_){}}\n" +
+        "        if(cy>=innerHeight-2&&vy>0&&canScroll(1)){\n" +
+        "          try{scrollBy(0,18)}catch(_){}}\n" +
+        "        draw();hover();\n" +
+        "      }\n" +
+        "    }\n" +
+        "    mLoop=requestAnimationFrame(step);\n" +
+        "  };\n" +
+        "  mLoop=requestAnimationFrame(step);\n" +
+        "}\n" +
+        // Re-level without leaving cursor mode: hold the box how you want
+        // to hold it, and this makes that the new centre.
+        "window.__ambientLevel=function(){mN=null;\n" +
+        "  flash('LEVELLED');return true;};\n" +
         "function nudge(dir,fast){var step=fast?54:16;\n" +
         "  if(dir==='left')cx=Math.max(2,cx-step);\n" +
         "  else if(dir==='right')cx=Math.min(innerWidth-2,cx+step);\n" +
@@ -1589,8 +1654,8 @@ public class MainActivity extends Activity {
         "window.__ambientCursor=function(){\n" +
         "  curMode=!curMode;\n" +
         "  if(curMode){if(cur)cur.classList.remove('__ambsel');cur=null;\n" +
-        "    cx=innerWidth/2;cy=innerHeight/2;hover();}\n" +
-        "  else {if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
+        "    cx=innerWidth/2;cy=innerHeight/2;hover();mStart();}\n" +
+        "  else {mStop();if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
         "    if(scrub){scrub=null;bar().style.display='none';}}\n" +
         "  draw();flash(curMode?'CURSOR':'HIGHLIGHT');\n" +
         "  return true;};\n" +
