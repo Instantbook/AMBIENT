@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v118";
+const APP_VERSION="v119";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1388,8 +1388,14 @@ function focusTile(){
     _settingFocus=false;
   }
 }
-/* if focus arrives some other way (click, browser nav), follow it */
+/* if focus arrives some other way (click, browser nav), follow it.
+   NOT in the wrapper. WebView 155 (a Play auto-update) runs its own
+   spatial navigation BEFORE dispatching keydown, ignoring preventDefault,
+   so following its focus moved the highlight once and route() moved it
+   again. The wrapper delivers every key to us, so focus is only ever an
+   echo of selIdx there, never a source of it. */
 document.addEventListener("focusin",e=>{
+  if(hostBridge){if(!_settingFocus)setTimeout(focusTile,0);return}
   if(mode!=="bezel"||_settingFocus)return;
   const t=e.target;if(!t||!t.closest)return;
   const tile=t.closest("#cockpit .tile");
@@ -1442,7 +1448,16 @@ document.addEventListener("click",e=>{
     openCard(c);
   }
 });
+/* Only a pointer that MOVED is a hover. WebView 155 re-sends a mouseover
+   at the last known pointer position every time focus changes - logged on
+   the device as the same (250,96) on every keypress - which snapped the
+   highlight back to whatever tile sat under that stale spot. A real hover
+   across tiles always arrives at new coordinates. */
+let _ptrAt="";
 document.addEventListener("mouseover",e=>{
+  const at=e.clientX+","+e.clientY;
+  if(at===_ptrAt)return;
+  _ptrAt=at;
   if(mode!=="bezel")return;
   const t=e.target;if(!t||!t.closest)return;
   const tile=t.closest("#cockpit .tile");
