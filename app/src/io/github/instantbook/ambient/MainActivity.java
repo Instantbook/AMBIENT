@@ -1628,41 +1628,6 @@ public class MainActivity extends Activity {
         "  try{v.currentTime=\n" +
         "    Math.max(0,Math.min(d-0.25,(v.currentTime||0)+dt))}catch(_){}\n" +
         "  showScrub();}\n" +
-        // Is this thing a scrub bar? Players label them, one way or
-        // another, and four levels up covers the usual wrapper nesting.
-        "function sliderish(e){\n" +
-        "  for(var n=e,i=0;n&&i<4;n=n.parentElement,i++){\n" +
-        "    var t=(n.tagName||'').toUpperCase();\n" +
-        "    if(t==='INPUT'&&/range/i.test(n.type||''))return true;\n" +
-        "    var r='';try{r=n.getAttribute('role')||''}catch(_){}\n" +
-        "    if(/slider|progressbar/i.test(r))return true;\n" +
-        "    var c=n.className;\n" +
-        "    if(c&&c.baseVal!==undefined)c=c.baseVal;\n" +
-        "    c=(typeof c==='string'?c:'')+' '+(n.id||'');\n" +
-        "    if(/seek|scrub|timeline|progress|playbar|slider/i.test(c))\n" +
-        "      return true;}\n" +
-        "  return false;}\n" +
-        // Is there a REAL control under the cursor? This has to be
-        // asked before falling back to the timeline, or every button
-        // sharing a player's control bar - play, mute, fullscreen -
-        // is swallowed by the scrub gesture, which is what happened.
-        "function actionable(e){\n" +
-        "  for(var n=e,i=0;n&&i<5;n=n.parentElement,i++){\n" +
-        "    var t=(n.tagName||'').toUpperCase();\n" +
-        "    if(t==='BUTTON'||t==='A'||t==='SELECT'||t==='TEXTAREA'||\n" +
-        "       t==='SUMMARY'||t==='INPUT')return true;\n" +
-        "    var r='';try{r=n.getAttribute('role')||''}catch(_){}\n" +
-        "    if(/button|link|menuitem|tab|checkbox|switch/i.test(r))\n" +
-        "      return true;\n" +
-        "    try{if(n.hasAttribute&&n.hasAttribute('onclick'))\n" +
-        "      return true}catch(_){}\n" +
-        // Players label their controls even when they are bare divs,
-        // so the accessible name is often the only signal there is.
-        "    var al='';try{al=(n.getAttribute('aria-label')||'')+' '+\n" +
-        "      (n.getAttribute('title')||'')}catch(_){}\n" +
-        "    if(/play|pause|mute|volume|full ?screen|caption|next|prev|skip/i.test(al))return true;\n" +
-        "  }\n" +
-        "  return false;}\n" +
         "function pickVideo(){var vs=vids(),best=null,ba=0;\n" +
         "  for(var i=0;i<vs.length;i++){var v=vs[i];\n" +
         "    var r=v.getBoundingClientRect(),a=r.width*r.height;\n" +
@@ -1670,36 +1635,19 @@ public class MainActivity extends Activity {
         "    if(cx>=r.left&&cx<=r.right&&cy>=r.top&&cy<=r.bottom+60)return v;\n" +
         "    if(a>ba){best=v;ba=a;}}\n" +
         "  return best;}\n" +
-        // "Near the timeline" taken literally: the bottom strip of the
-        // picture, which is where every player puts its bar, plus a little
-        // slack below for controls drawn outside the video box.
-        "function nearTimeline(){var vs=vids();\n" +
-        "  for(var i=0;i<vs.length;i++){\n" +
-        "    var r=vs[i].getBoundingClientRect();\n" +
-        "    if(r.width<80||r.height<60)continue;\n" +
-        "    if(cx<r.left||cx>r.right)continue;\n" +
-        "    var lip=Math.max(44,r.height*0.22);\n" +
-        "    if(cy>r.bottom-lip&&cy<r.bottom+48)return vs[i];}\n" +
-        "  return null;}\n" +
+        "function holdTimeline(){var v=pickVideo();\n" +
+        "  if(!v){flash('NO VIDEO HERE');return;}\n" +
+        "  if(!isFinite(v.duration)||v.duration<=0){\n" +
+        "    flash('LIVE - NO TIMELINE');return;}\n" +
+        "  startScrub(v);}\n" +
+        "var okDown=false,okHeld=false;\n" +
         "function clickAt(){var h=null;\n" +
         "  try{h=document.elementFromPoint(cx,cy)}catch(_){}\n" +
         // OK is what leaves the timeline again, so the mode cannot trap.
         "  if(scrub){endScrub();return true;}\n" +
-        // Deliberately NO synthetic click when taking the timeline: a click
-        // on a seek bar jumps to wherever the cursor happens to be, and
-        // being thrown somewhere you did not ask for is a worse start than
-        // simply having control from where you are.
-        // Order matters: the slider itself is explicit intent to
-        // scrub, a real control is intent to click it, and only bare
-        // space near the bar falls back to taking the timeline.
-        "  var sv=(h&&sliderish(h))?pickVideo()\n" +
-        "    :((h&&actionable(h))?null:nearTimeline());\n" +
-        "  if(sv&&isFinite(sv.duration)&&sv.duration>0){\n" +
-        "    startScrub(sv);return true;}\n" +
         "  if(!h)return false;\n" +
         // A bare <video> with no control under the pointer: play or
-        // pause is the only thing a click can sensibly mean. A player
-        // with its own buttons is caught by actionable() above.
+        // pause is the only thing a click can sensibly mean.
         "  if((h.tagName||'').toUpperCase()==='VIDEO'){\n" +
         "    try{if(h.paused){h.play();flash('PLAY')}\n" +
         "        else{h.pause();flash('PAUSE')}\n" +
@@ -1724,6 +1672,12 @@ public class MainActivity extends Activity {
         "    if(scrub){scrub=null;bar().style.display='none';}}\n" +
         "  draw();flash(curMode?'CURSOR':'HIGHLIGHT');\n" +
         "  return true;};\n" +
+        "document.addEventListener('keyup',function(ev){\n" +
+        "  if(ev.key!=='Enter'||!okDown)return;\n" +
+        "  okDown=false;\n" +
+        "  if(curMode&&!okHeld&&!scrub)clickAt();\n" +
+        "  ev.preventDefault();ev.stopPropagation();\n" +
+        "},true);\n" +
         "document.addEventListener('keydown',function(ev){\n" +
         "  var k=ev.key,d=null;\n" +
         "  if(k==='ArrowRight')d='right';else if(k==='ArrowLeft')d='left';\n" +
@@ -1739,7 +1693,9 @@ public class MainActivity extends Activity {
         "      ev.preventDefault();ev.stopPropagation();return;}\n" +
         "    if(d){nudge(d,ev.repeat===true);\n" +
         "      ev.preventDefault();ev.stopPropagation();return;}\n" +
-        "    clickAt();ev.preventDefault();ev.stopPropagation();return;}\n" +
+        "    if(!ev.repeat){okDown=true;okHeld=false;}\n" +
+        "    else if(okDown&&!okHeld){okHeld=true;holdTimeline();}\n" +
+        "    ev.preventDefault();ev.stopPropagation();return;}\n" +
         "  if(typing()){\n" +
         // In a text field the keys belong to the field: left/right are the
         // text cursor and Enter submits. Up/down are the way OUT - without
