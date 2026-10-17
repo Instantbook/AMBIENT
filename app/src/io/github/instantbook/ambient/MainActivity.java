@@ -1307,6 +1307,9 @@ public class MainActivity extends Activity {
     private static final String SPATIAL_NAV =
         "(function(){\n" +
         "if(window.__ambientNav)return;window.__ambientNav=1;\n" +
+        "var __ambWant=false;\n" +
+        "try{__ambWant=localStorage.getItem('__ambCur')==='1'}\n" +
+        "catch(_){}\n" +
         // Roles and tabindex catch the well-behaved half of a page. They do
         // NOT catch a hamburger: that is usually a bare <div> with its
         // listener bound in JavaScript, carrying no href, no role and no
@@ -1492,46 +1495,57 @@ public class MainActivity extends Activity {
         // Tilt sets VELOCITY so that level means stationary - mapping
         // angle straight to position would mean the cursor slides away
         // the moment you rest the box.
-        "var mN=null,mLoop=0;\n" +
+        "var mLoop=0,bx=0,by=0,bz=0,bN=0,fAx=-1;\n" +
         "function mRead(){try{\n" +
         "  if(!window.AmbientHost||!AmbientHost.motion)return null;\n" +
         "  return JSON.parse(AmbientHost.motion()||'null');\n" +
         "}catch(_){return null}}\n" +
         "function mStop(){if(mLoop)cancelAnimationFrame(mLoop);mLoop=0;\n" +
-        "  mN=null;\n" +
         "  try{if(window.AmbientHost&&AmbientHost.motionOn)\n" +
         "    AmbientHost.motionOn(false)}catch(_){}}\n" +
         "function mStart(){\n" +
         "  if(mLoop)return;\n" +
         "  try{if(!window.AmbientHost||!AmbientHost.motionOn)return;\n" +
         "    if(!AmbientHost.motionOn(true))return;}catch(_){return}\n" +
-        "  mN=null;\n" +
-        // SX/SY are the axis signs and SPD the gain. The board's
-        // orientation inside the case is not something to infer, so they
-        // live here together, ready to flip after one real test.
-        "  var SX=-1,SY=1,DZ=0.55,SPD=2.6,MAXV=26;\n" +
+        "  var SX=-1,SY=-1,SPD=170,DZ=0.015,MAXV=34;\n" +
         "  var step=function(){\n" +
         "    mLoop=0;\n" +
         "    if(!curMode){mStop();return}\n" +
         "    var m=mRead();\n" +
-        "    if(m&&m.ax!=null&&m.on){\n" +
-        // Neutral is wherever it was being held when the mode came on,
-        // because nobody holds a handheld box level.
-        "      if(!mN)mN={x:m.ax,y:m.ay};\n" +
-        "      var dx=m.ax-mN.x,dy=m.ay-mN.y;\n" +
+        "    if(m&&m.on&&m.gx!=null){\n" +
+        "      var mag=Math.abs(m.gx-bx)+Math.abs(m.gy-by)+\n" +
+        "        Math.abs(m.gz-bz);\n" +
+        "      if(mag<0.08||bN<30){\n" +
+        "        var k=bN<30?0.2:0.02;bN++;\n" +
+        "        bx+=(m.gx-bx)*k;by+=(m.gy-by)*k;bz+=(m.gz-bz)*k;\n" +
+        "      }\n" +
+        "      var wx=m.gx-bx,wy=m.gy-by,wz=m.gz-bz;\n" +
+        "      var ax=m.ax,ay=m.ay,az=m.az;\n" +
+        "      var gl=Math.sqrt(ax*ax+ay*ay+az*az)||1;\n" +
+        "      var gX=ax/gl,gY=ay/gl,gZ=az/gl;\n" +
+        "      var gs=[Math.abs(gX),Math.abs(gY),Math.abs(gZ)];\n" +
+        "      var bi=0;\n" +
+        "      if(gs[1]<gs[bi])bi=1;\n" +
+        "      if(gs[2]<gs[bi])bi=2;\n" +
+        "      if(fAx<0||gs[bi]<gs[fAx]-0.15)fAx=bi;\n" +
+        "      var fX=fAx===0?1:0,fY=fAx===1?1:0,fZ=fAx===2?1:0;\n" +
+        "      var rX=fY*gZ-fZ*gY,rY=fZ*gX-fX*gZ,rZ=fX*gY-fY*gX;\n" +
+        "      var rl=Math.sqrt(rX*rX+rY*rY+rZ*rZ)||1;\n" +
+        "      rX/=rl;rY/=rl;rZ/=rl;\n" +
+        "      var yaw=wx*gX+wy*gY+wz*gZ;\n" +
+        "      var pit=wx*rX+wy*rY+wz*rZ;\n" +
         "      var f=function(d){\n" +
-        "        if(d>DZ)return (d-DZ)*SPD;\n" +
-        "        if(d<-DZ)return (d+DZ)*SPD;\n" +
+        "        if(d>DZ)return (d-DZ);\n" +
+        "        if(d<-DZ)return (d+DZ);\n" +
         "        return 0;};\n" +
-        "      var vx=f(dx)*SX,vy=f(dy)*SY;\n" +
+        "      var vx=f(yaw)*SPD*SX,vy=f(pit)*SPD*SY;\n" +
         "      if(vx>MAXV)vx=MAXV;if(vx<-MAXV)vx=-MAXV;\n" +
         "      if(vy>MAXV)vy=MAXV;if(vy<-MAXV)vy=-MAXV;\n" +
         "      if(vx||vy){\n" +
         "        cx=Math.max(2,Math.min(innerWidth-2,cx+vx));\n" +
         "        cy=Math.max(2,Math.min(innerHeight-2,cy+vy));\n" +
-        // At an edge with nowhere to go, scroll instead - the same rule
-        // the d-pad uses, so a long page stays reachable by tilt alone.
-        "        if(cy<=2&&vy<0&&canScroll(-1)){try{scrollBy(0,-18)}catch(_){}}\n" +
+        "        if(cy<=2&&vy<0&&canScroll(-1)){\n" +
+        "          try{scrollBy(0,-18)}catch(_){}}\n" +
         "        if(cy>=innerHeight-2&&vy>0&&canScroll(1)){\n" +
         "          try{scrollBy(0,18)}catch(_){}}\n" +
         "        draw();hover();\n" +
@@ -1541,10 +1555,8 @@ public class MainActivity extends Activity {
         "  };\n" +
         "  mLoop=requestAnimationFrame(step);\n" +
         "}\n" +
-        // Re-level without leaving cursor mode: hold the box how you want
-        // to hold it, and this makes that the new centre.
-        "window.__ambientLevel=function(){mN=null;\n" +
-        "  flash('LEVELLED');return true;};\n" +
+        "window.__ambientLevel=function(){bN=0;\n" +
+        "  flash('RE-ZEROED');return true;};\n" +
         "function nudge(dir,fast){var step=fast?54:16;\n" +
         "  if(dir==='left')cx=Math.max(2,cx-step);\n" +
         "  else if(dir==='right')cx=Math.min(innerWidth-2,cx+step);\n" +
@@ -1686,6 +1698,8 @@ public class MainActivity extends Activity {
         // and the cursor toggle out here, with no collision.
         "window.__ambientCursor=function(){\n" +
         "  curMode=!curMode;\n" +
+        "  try{localStorage.setItem('__ambCur',curMode?'1':'0')}\n" +
+        "  catch(_){}\n" +
         "  if(curMode){if(cur)cur.classList.remove('__ambsel');cur=null;\n" +
         "    cx=innerWidth/2;cy=innerHeight/2;hover();mStart();}\n" +
         "  else {mStop();if(hov){fire(hov,'mouseout',cx,cy);hov=null;}\n" +
@@ -1783,6 +1797,16 @@ public class MainActivity extends Activity {
         "setInterval(function(){sweep();if(scrub)showScrub();},1000);\n" +
         // No auto-selection on load: picking a target unasked moved focus
         // on pages that were working fine.
+        //
+        // Cursor MODE is a different matter and is restored: it centres a
+        // pointer and selects nothing, so it cannot change what OK does
+        // to an element. Without this the air mouse has to be switched on
+        // again for every page of a site. Deferred because
+        // __ambientCursor() hit-tests the document through hover(), and
+        // before layout that finds nothing.
+        "if(__ambWant&&!curMode)setTimeout(function(){\n" +
+        "  try{window.__ambientCursor()}catch(_){}\n" +
+        "},400);\n" +
         "})();";
 
 
