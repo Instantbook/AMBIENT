@@ -50,7 +50,11 @@ import android.hardware.SensorManager;
 import android.webkit.WebChromeClient;
 import android.webkit.ConsoleMessage;
 import android.util.Log;
+import android.widget.FrameLayout;
 import android.widget.Toast;
+import android.net.http.SslError;
+import android.webkit.SslErrorHandler;
+import android.webkit.RenderProcessGoneDetail;
 
 /**
  * A deliberately thin WebView host for AMBIENT.
@@ -165,6 +169,10 @@ public class MainActivity extends Activity {
         } catch (Throwable t) { /* leave it off */ }
     }
     private WebView web;
+    /** Holds the WebView and, over it, the native video layer. */
+    private FrameLayout root;
+    private NativeVideo nv;
+    private Net net;
     private long lastBackAt = 0L;
     private boolean backWasLong = false;
     /** When OK was last pressed on the remote. tapAt() is gated on it,
@@ -974,6 +982,76 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String mediaBase() { return atAmbient ? MEDIA_HOST : ""; }
+
+        /* ---- native video (see NativeVideo for why it exists) ---- */
+
+        @JavascriptInterface
+        public boolean nvPlay(long id, double atSec) {
+            if (!atAmbient || nv == null) return false;
+            nv.play(id, atSec);
+            return true;
+        }
+
+        /** toggle | play | pause | seek (arg = absolute seconds) | stop */
+        @JavascriptInterface
+        public void nvCmd(String c, double arg) {
+            if (atAmbient && nv != null) nv.cmd(c, arg);
+        }
+
+        @JavascriptInterface
+        public void nvOsd(String text, int ms) {
+            if (atAmbient && nv != null) nv.osd(text, ms);
+        }
+
+        @JavascriptInterface
+        public String nvState() {
+            return atAmbient && nv != null ? nv.state() : "{}";
+        }
+
+        /* ---- Wi-Fi and captive portals (see Net) ---- */
+
+        @JavascriptInterface
+        public String netStatus() {
+            return atAmbient && net != null ? net.status() : "{}";
+        }
+
+        @JavascriptInterface
+        public void netProbe() {
+            if (atAmbient && net != null) net.probe();
+        }
+
+        /** Leave the cockpit for the network's sign-in page. */
+        @JavascriptInterface
+        public boolean openPortal() {
+            if (!atAmbient || net == null) return false;
+            final String u = net.target(null);
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    net.bindIfNeeded();
+                    web.loadUrl(u);
+                }
+            });
+            return true;
+        }
+
+        /** "wifi" or "date": the TV's own settings screens, which are
+         *  d-pad navigable - choosing a network is not worth rebuilding. */
+        @JavascriptInterface
+        public boolean openSettings(String which) {
+            if (!atAmbient) return false;
+            String a = "date".equals(which)
+                    ? android.provider.Settings.ACTION_DATE_SETTINGS
+                    : android.provider.Settings.ACTION_WIFI_SETTINGS;
+            final android.content.Intent i = new android.content.Intent(a);
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (i.resolveActivity(getPackageManager()) == null) return false;
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    try { startActivity(i); } catch (Throwable ignored) {}
+                }
+            });
+            return true;
+        }
 
         /**
          * [{id,name,dur,mime,w,h,size,dir}] of every video MediaStore knows.
@@ -2104,7 +2182,38 @@ public class MainActivity extends Activity {
         // sideloaded debug build; there is nothing here worth hiding.
         try { WebView.setWebContentsDebuggingEnabled(true); }
         catch (Throwable ignored) {}
-        web = new WebView(this);
+        root = new FrameLayout(this);
+        root.setBackgroundColor(0xFF000000);
+        web = makeWeb();
+        root.addView(web, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+        // Added after the WebView so it draws on top of it when shown.
+        nv = new NativeVideo(this, root);
+        net = new Net(this);
+        setContentView(root);
+        web.requestFocus();
+
+        // Opened by Android as the Wi-Fi sign-in app: go straight to the
+        // portal instead of the cockpit.
+        if (Net.isCaptiveIntent(getIntent())) {
+            openCaptive(getIntent());
+        } else if (state == null) {
+            web.loadUrl(URL);
+        } else {
+            web.restoreState(state);
+        }
+    }
+
+    /**
+     * Built in a method of its own, rather than inline in onCreate, so a
+     * dead renderer can be replaced by a fresh WebView (see
+     * onRenderProcessGone). A renderer crash with nothing handling it kills
+     * the whole app - measured here, when a test fetch of a 3GB file ran
+     * the renderer out of memory and took AMBIENT down with it.
+     */
+    private WebView makeWeb() {
+        final WebView web = new WebView(this);
         web.setBackgroundColor(0xFF000000);
 
         WebSettings s = web.getSettings();
@@ -2139,6 +2248,10 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView v, String url, android.graphics.Bitmap f) {
                 atAmbient = url == null || url.startsWith(URL);
+                // Any new page - a reload included - has forgotten that a
+                // film was playing natively, and nothing would ever close
+                // the layer. It would sit over the cockpit for good.
+                if (nv != null) nv.stopNow();
                 super.onPageStarted(v, url, f);
             }
 
@@ -2161,6 +2274,23 @@ public class MainActivity extends Activity {
                     try { v.evaluateJavascript(SPATIAL_NAV, null); }
                     catch (Throwable ignored) {}
                 }
+            }
+
+            /* The default cancels every certificate error silently, which
+               is a blank page. On this box that is mostly the 2024 boot
+               clock - see Net for why the date alone gets a second, exact
+               check against network time, and nothing else does. */
+            @Override
+            public void onReceivedSslError(WebView v, SslErrorHandler h,
+                    SslError e) {
+                net.onSslError(h, e);
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView v,
+                    RenderProcessGoneDetail d) {
+                recoverRenderer(v);
+                return true;
             }
 
             @Override
@@ -2254,14 +2384,35 @@ public class MainActivity extends Activity {
             cm.setAcceptThirdPartyCookies(web, true);
         } catch (Throwable ignored) {}
 
-        setContentView(web);
-        web.requestFocus();
+        return web;
+    }
 
-        if (state == null) {
-            web.loadUrl(URL);
-        } else {
-            web.restoreState(state);
-        }
+    /** Android chose AMBIENT to sign in to a Wi-Fi network. */
+    private void openCaptive(android.content.Intent i) {
+        if (nv != null) nv.stopNow();
+        String u = net.takeCaptive(i);
+        net.bindIfNeeded();
+        Log.i(TAG, "captive portal -> " + u);
+        web.loadUrl(u);
+        Toast.makeText(this, "Wi-Fi sign-in · BACK twice returns to AMBIENT",
+                Toast.LENGTH_LONG).show();
+    }
+
+    /** Replace a WebView whose renderer has died, and reload the cockpit. */
+    private void recoverRenderer(WebView dead) {
+        Log.w(TAG, "renderer gone - rebuilding the WebView");
+        try { if (nv != null) nv.stopNow(); } catch (Throwable ignored) {}
+        try { root.removeView(dead); } catch (Throwable ignored) {}
+        try { dead.destroy(); } catch (Throwable ignored) {}
+        if (dead != web) return;
+        web = makeWeb();
+        root.addView(web, 0, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+        web.requestFocus();
+        web.loadUrl(URL);
+        Toast.makeText(this, "The page crashed and was reloaded",
+                Toast.LENGTH_LONG).show();
     }
 
     /**
@@ -2279,6 +2430,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (Net.isCaptiveIntent(intent)) { openCaptive(intent); return; }
         // THIS is the path the shortcut button actually takes, verified on
         // hardware: pressing it while AMBIENT is already in front toggles
         // the lock from here, and onKeyDown never sees a key at all - the
@@ -2320,6 +2472,16 @@ public class MainActivity extends Activity {
            battery drain on a device that runs off a cell. The page
            re-enables it when it next wants the cursor. */
         motionEnable(false);
+        if (nv != null) nv.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (nv != null) nv.onResume();
+        // Coming back from Android's Wi-Fi settings: answer for the network
+        // just chosen, not the one that was there before.
+        if (net != null) net.probe();
     }
 
     @Override
@@ -2439,6 +2601,12 @@ public class MainActivity extends Activity {
     }
 
     private void siteBack(boolean quick) {
+        // Home to the cockpit: let go of any portal network binding, and
+        // re-check so the WI-FI tile shows whether the sign-in worked.
+        if (net != null && (quick || !web.canGoBack())) {
+            net.unbind();
+            net.probe();
+        }
         if (quick) {                 // impatient: go straight home
             web.loadUrl(URL);
         } else if (web.canGoBack()) {
@@ -2498,6 +2666,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (net != null) net.release();
+        if (nv != null) nv.stopNow();
         if (web != null) {
             web.destroy();
             web = null;

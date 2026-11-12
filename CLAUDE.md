@@ -196,6 +196,12 @@ What this explains, and all of it was chased elsewhere first:
 settings put global ntp_server time.google.com     # revert: settings delete global ntp_server
 ```
 
+**On a captive network (plane, hotel) it does NOT self-heal**, and this was the real reason
+WestJet, Porter and Marriott Wi-Fi "failed at the web page": the portal blocks NTP until you
+sign in, the sign-in page is https, and https fails until NTP lands. A circle. `Net.java`
+breaks it — see "Wi-Fi sign-in" below. `ro.build.date.utc` is 1716384749, which is exactly
+the 2024-05-22 the box boots into: SystemServer clamps the clock to the build date.
+
 **Diagnosis order for any "no internet" report on this box:** compare `adb shell date -u` against
 real time FIRST, then read `dumpsys network_stack | grep PROBE_`. If HTTP passes and HTTPS fails on
 chain validation, it is the clock and it will clear itself. Do not restart the router.
@@ -279,8 +285,9 @@ Almost everything is a "card" object registered via `registerCards([...])` near 
   fullscreen, so black blends into the glasses' unlit surround.
 - Malformed cards are dropped at registration, never fatal to the rest of the app.
 
-Registered cards: `cardClock` (pinned), `cardWeather`, `cardMarkets`, `cardHeadlines`, `cardRadio`,
-`cardMusic`, `cardVis`, `cardLaunch`, `cardScenes`, `cardSystem`.
+Registered cards: see the `registerCards([...])` call at the bottom of `index.html` — the list
+here went stale more than once. `cardClock` is the only pinned one; `cardWifi` (Wi-Fi sign-in)
+sits after `cardLaunch`.
 
 ### Shell / layout
 
@@ -373,6 +380,9 @@ adb shell pm grant io.github.instantbook.ambient android.permission.READ_EXTERNA
   so every customisation silently becomes disposable again.
 - **Without the second**, MUSIC finds nothing at all. It reads the library through
   MediaStore, which needs it.
+- Optional third: `adb shell pm grant io.github.instantbook.ambient android.permission.ACCESS_FINE_LOCATION`.
+  Purely cosmetic — Android 10+ hides the Wi-Fi network *name* without it, so the
+  WI-FI tile says "wi-fi" instead of "WestJet Wi-Fi". Everything else works.
 
 Rebuild first with `bash app/build.sh`; the APK lands in a temp dir outside Dropbox.
 A signing-key change requires `adb uninstall` first, and that wipes app data (though
@@ -512,6 +522,68 @@ try to detect it from the tags: the Greek titles were **romanised to Latin scrip
 earlier pass, so they read as English to any test of the text. A Greek-script check
 survives only as a fallback for anything filed outside that folder, and the card shows
 "app update needed" when `path` is absent rather than under-counting silently.
+
+### Video over 2 GiB: the WebView cannot reach those bytes, so Android plays them
+
+**A WebView cannot serve byte 2,147,483,648 onward of an intercepted response.** Chromium's
+`InputStreamReader::VerifyRequestedRange` takes the size from `InputStream.available()` — an
+`int` — and refuses any range that starts beyond it; the native `Skip` also truncates to `int`.
+Nothing in `serveMedia` can fix that. Measured on Tomorrowland (2.84 GiB, H.264 1080p): resume
+at 1:23:42 played, while any seek past ~1:31:37 (its 2 GiB mark) died with
+`PIPELINE_ERROR_READ: FFmpegDemuxer: data source error` — and a failed `<video>` is dead for
+good while the OSD keeps printing the times you jump to. That was "the screen went white, the
+progress bar moves, nothing plays". Nine of 204 library videos are over 2 GiB.
+
+**A loopback HTTP server is not a way round it** — tested with `adb reverse` and a range-capable
+server: WebView 156 refuses an https page's `http://127.0.0.1` media without sending a request
+(Local Network Access). Do not retry that either.
+
+So `NativeVideo.java` is a `VideoView` laid over the WebView, reading the `content://` URI
+directly. VIDEO sends files ≥ 2 GiB and formats Chromium cannot decode (MKV, AVI) there, and
+switches any `<video>` that errors to it at the same position. The page keeps focus and every
+key; it drives the player through `nvPlay / nvCmd / nvState / nvOsd`, and the OSD is a native
+`TextView` because nothing the page draws can appear over a SurfaceView. Load-bearing details:
+
+- **Position is only reported once prepared.** Before that `getCurrentPosition()` is 0, and a
+  saved position under a minute is *deleted* — the film would forget its resume point on open.
+- **`OnErrorListener` returns true**, or VideoView raises its own dialog and steals focus.
+- **`onPageStarted` stops the native layer.** A reloaded page has forgotten the film, and
+  nothing would ever close the overlay.
+- **`screencap` cannot see it.** Amlogic composites the decoder on a hardware video plane
+  (`HWCVIDEO` in `dumpsys SurfaceFlinger`), so a screenshot shows a black letterbox while the
+  film is plainly on the glasses. Verify via `nvState()` and SurfaceFlinger, not the PNG.
+
+**Never test an intercepted media URL with `fetch().arrayBuffer()`.** The WebView streams the
+body to EOF whatever range was asked for, so the renderer tried to buffer 3 GB and died — and
+with no `onRenderProcessGone` handler that killed the whole app. The handler now rebuilds the
+WebView instead (`recoverRenderer`), but test with a muted, off-screen `<video>` over CDP:
+`adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`, `Runtime.evaluate`.
+
+Separately, `Tomorrowland_1080.mp4` is itself truncated: its `mdat` claims 1,015,808 bytes more
+than the file holds — an interrupted copy that costs the final seconds, nothing more.
+
+### Wi-Fi sign-in (WI-FI card, `Net.java`)
+
+Android hands a captive portal to `com.android.captiveportallogin`, a touch-only WebView this
+remote cannot drive. The WI-FI tile shows ONLINE / SIGN IN / NO NET from a plain-http probe of
+`generate_204` (a redirect *is* the portal; its `Location` is the sign-in page), and SIGN IN
+opens that page in AMBIENT's own WebView, which has spatial navigation and the air-mouse
+cursor. AMBIENT also registers for `android.net.conn.CAPTIVE_PORTAL`, so Android offers it as
+the sign-in app — pick it with "always".
+
+- **`usesCleartextTraffic="true"` is required.** Targeting API 28+ blocks plain http in both
+  `HttpURLConnection` and the WebView, and a portal is found and entered over http by design.
+- **Certificates and the 2024 clock.** When the clock is provably wrong (earlier than
+  `BuildLocal.BUILT`, the APK's build time) *and* the WebView's only complaint is the date,
+  `onSslError` fetches the chain and validates it in full — anchors, signatures, host name,
+  the same leaf the WebView saw — at the time from the probe's HTTP `Date` header. Anything
+  else is cancelled exactly as before, and once NTP lands none of it runs. The Date header is
+  unauthenticated; the exposure is reviving a certificate that expired after the APK was built,
+  only while the clock is wrong — accepted, against a sign-in page that cannot load at all.
+- **Location strings are filtered to http(s).** The portal chooses them, and
+  `loadUrl("javascript:…")` would run inside AMBIENT with the bridge attached.
+- The process binds to the Wi-Fi network only when it is not already the default (as
+  CaptivePortalLogin does), and unbinds on validation, loss, or returning home.
 
 ### The reader, and reading the source file before blaming the renderer
 

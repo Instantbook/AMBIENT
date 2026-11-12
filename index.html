@@ -272,7 +272,7 @@ input[type=text]:focus{border-color:var(--accent)}
    Cards unchanged from the §3 contract; renderCompact() is the
    one optional addition (rail/overview tile view).
    ============================================================ */
-const APP_VERSION="v119";
+const APP_VERSION="v120";
 
 /* This block must come FIRST. Module-level initialisers read localStorage
    the moment this script parses - themeName defaults, and the companion
@@ -1311,6 +1311,10 @@ addEventListener("resize",()=>{clearTimeout(_rz);
    is handled in Java below the page entirely. */
 let keyLock=false;
 function vidFlash(msg,ms){
+  /* the device's player covers the page, so its own OSD has to say it */
+  if(cardVideo&&cardVideo._native&&cardVideo._playing){
+    cardVideo._osd(msg,ms||2000);return true;
+  }
   const osd=document.getElementById("vid-osd");
   if(!osd)return false;
   osd.textContent=msg;
@@ -2823,6 +2827,150 @@ const cardLaunch={
       }
     });
   }
+};
+
+/* ---- wi-fi: getting past a plane's or a hotel's sign-in page ----
+   WestJet, Porter and Marriott all put the internet behind a portal page,
+   and Android hands that page to a touch-only sign-in app that cannot be
+   driven from this remote. This card finds the portal itself (a plain-http
+   probe, which the portal hijacks) and opens it in AMBIENT's own WebView,
+   which has d-pad link navigation and the air-mouse cursor.
+
+   The other half is the clock: the box boots believing it is 2024-05-22
+   and only NTP fixes that - which the portal blocks until you sign in. So
+   every https sign-in page failed its certificate check as "not yet
+   valid", and there was no getting past it. The app now re-checks a
+   date-only certificate failure, in full, against the time the network
+   reports (see Net.java). This card says when that is happening. */
+const cardWifi={
+  id:"wifi",title:"WI-FI",icon:"globe",
+  pane:"system",size:"small",order:84,refresh:null,offline:"live-only",
+  sel:0,_s:null,_note:"",_sig:"",
+  _ok(){return !!(hostBridge&&hostBridge.netStatus)},
+  _read(){
+    try{this._s=JSON.parse(hostBridge.netStatus()||"{}")}catch(e){this._s=null}
+  },
+  init(ctx){
+    if(!this._ok())return;
+    this._read();
+    setInterval(()=>{
+      this._read();
+      const s=this._s||{};
+      /* repaint only when something visible changed */
+      const sig=[s.wifi,s.ssid,s.probe,s.validated,s.clockBehind,s.netTime,
+        s.portal].join("|");
+      if(sig!==this._sig){this._sig=sig;if(s.probe!=="probing")this._note="";
+        ctx.rerender()}
+    },2500);
+    /* Keep asking while there is Wi-Fi but no internet: the sign-in may
+       have been finished on another device, or the plane's link may just
+       have come up. One small http request every 30s. */
+    setInterval(()=>{
+      const s=this._s;
+      if(s&&s.wifi&&s.probe!=="online"&&s.probe!=="probing")
+        try{hostBridge.netProbe()}catch(e){}
+    },30000);
+  },
+  _state(){
+    const s=this._s;
+    if(!s||!this._ok())return "na";
+    if(!s.wifi)return "off";
+    if(s.probe==="online")return "online";
+    if(s.probe==="portal")return "portal";
+    if(s.probe==="offline")return "offline";
+    return "checking";
+  },
+  _rows(){
+    const st=this._state(),s=this._s||{};
+    const rows=[];
+    if(st==="portal")
+      rows.push({id:"signin",label:"SIGN IN",
+        meta:s.portal?this._host(s.portal):"open the network's page"});
+    else if(st==="offline"||st==="checking")
+      rows.push({id:"signin",label:"OPEN SIGN-IN PAGE",
+        meta:"if the network has one"});
+    rows.push({id:"check",label:"CHECK AGAIN",meta:this._ago(s.age)});
+    rows.push({id:"wifi",label:"CHOOSE NETWORK",meta:"Android Wi-Fi settings"});
+    if(s.clockBehind)
+      rows.push({id:"date",label:"DATE & TIME",meta:"set the clock by hand"});
+    return rows;
+  },
+  _host(u){try{return new URL(u).hostname}catch(e){return ""}},
+  _ago(ms){
+    if(!(ms>=0))return "not checked yet";
+    const s=Math.round(ms/1000);
+    return "checked "+(s<60?s+"s":Math.round(s/60)+" min")+" ago";
+  },
+  _day(ms){
+    try{return new Date(ms).toISOString().slice(0,10)}catch(e){return "?"}
+  },
+  _act(ctx){
+    const r=this._rows()[this.sel];
+    if(!r)return;
+    let ok=true;
+    try{
+      if(r.id==="signin")ok=hostBridge.openPortal();
+      else if(r.id==="check"){hostBridge.netProbe();this._note="checking…"}
+      else if(r.id==="wifi")ok=hostBridge.openSettings("wifi");
+      else if(r.id==="date")ok=hostBridge.openSettings("date");
+    }catch(e){ok=false}
+    if(!ok)this._note="that did not open";
+    ctx.rerender();
+  },
+  render(ctx){
+    if(!this._ok())
+      return "<div class='state'>Wi-Fi sign-in needs the AMBIENT app — a "+
+        "web page cannot see the network.</div>";
+    const s=this._s||{},st=this._state();
+    const say={
+      online:["ONLINE","var(--up)"],
+      portal:["SIGN-IN REQUIRED","var(--warn)"],
+      offline:["NO INTERNET","var(--down)"],
+      checking:["CHECKING…","var(--accent)"],
+      off:["NO WI-FI","var(--down)"]
+    }[st]||["—","var(--accent)"];
+    const rows=this._rows();
+    if(this.sel>=rows.length)this.sel=rows.length-1;
+    const clock=s.clockBehind
+      ?"<div class='lbl' style='font-size:12px;margin-top:6px;color:var(--warn)'>"+
+        "device clock reads "+this._day(s.sys)+" · secure pages are checked "+
+        "against "+(s.netTime?"network time ("+this._day(s.trusted)+")"
+          :"the app's build date until the network gives a time")+
+        "</div>":"";
+    return "<div style='margin-bottom:10px'>"+
+      "<div style='color:var(--accent);font-size:15px'>"+
+        esc(s.ssid||(s.wifi?"Wi-Fi":"not connected"))+"</div>"+
+      "<div style='color:"+say[1]+";font-size:13px;letter-spacing:.12em'>"+
+        say[0]+"</div>"+clock+"</div>"+
+      rows.map((r,i)=>"<div class='row"+(i===this.sel?" hl sel":"")+
+        "' data-row='"+i+"'><span class='"+(i===this.sel?"":"lbl")+"'>"+
+        esc(r.label)+"</span><span class='lbl' style='font-size:12px'>"+
+        esc(r.meta||"")+"</span></div>").join("")+
+      (this._note?"<div class='state' style='margin-top:6px;"+
+        "color:var(--accent)'>"+esc(this._note)+"</div>":"")+
+      "<div class='state' style='margin-top:8px'>▲▼ choose · OK do it"+
+      "<br>on the sign-in page: ▲▼◄► move between links · OK clicks · "+
+      "shortcut button = cursor · BACK twice = AMBIENT</div>";
+  },
+  renderCompact(ctx){
+    if(!this._ok())return face("—","app only");
+    const s=this._s||{},st=this._state();
+    const name=esc(s.ssid||"wi-fi");
+    const sub=s.clockBehind?"clock "+this._day(s.sys).slice(0,4):undefined;
+    if(st==="online")return face("ONLINE",name,{color:"var(--up)",sub});
+    if(st==="portal")return face("SIGN IN",name,{color:"var(--warn)",sub});
+    if(st==="offline")return face("NO NET",name,{color:"var(--down)",sub});
+    if(st==="off")return face("OFF","no wi-fi",{color:"var(--down)"});
+    return face("…",name,{sub});
+  },
+  onKey(ctx,k){
+    const rows=this._rows();
+    if(k==="down"&&this.sel<rows.length-1){this.sel++;ctx.rerender();return true}
+    if(k==="up"&&this.sel>0){this.sel--;ctx.rerender();return true}
+    if(k==="enter"){this._act(ctx);return true}
+    return false;
+  },
+  onPick(ctx,i){this.sel=i;this._act(ctx)}
 };
 
 /* ---- music: files on the microSD, played through the same audio bus ----
@@ -5469,6 +5617,7 @@ const cardVideo={
   pane:"listen",size:"large",order:53,refresh:null,offline:"local-first",
   sel:0,_items:null,_level:"folders",_dir:null,_season:null,
   _playing:null,_note:"",_flash:"",_flashT:null,_ctx:null,
+  _native:false,_nvPoll:null,_nvT:null,_nvTAt:0,
   /* Immersive only while something is actually playing. The shell reads
      this at render time, so it can change: the browse list wants the frame
      and its hints, a playing video wants the whole panel and nothing else
@@ -5524,6 +5673,77 @@ const cardVideo={
     });
   },
   _playable(v){return VIDEO_OK.test(String(v&&v.mime||""))},
+  /* ---- the device's own player ----
+     The WebView cannot read past byte 2,147,483,647 of a file the app
+     serves: Chromium takes the response size from InputStream.available(),
+     an int. Measured on Tomorrowland (2.84 GiB): a seek past ~1:31:37
+     died with PIPELINE_ERROR_READ and the <video> never played again,
+     while the OSD went on showing the times it was asked for - which is
+     exactly "the progress bar moves and nothing plays". Such files go to
+     Android's player instead (NativeVideo.java), laid over the page; so do
+     formats Chromium cannot decode, and anything the <video> fails on. */
+  _nvOk(){return !!(hostBridge&&hostBridge.nvPlay)},
+  _needsNative(v){
+    return this._nvOk()&&((v.size||0)>=2147483647||!this._playable(v));
+  },
+  _nvState(){
+    try{return JSON.parse(hostBridge.nvState()||"{}")}catch(e){return {}}
+  },
+  /* One OSD call for both players: the page's own line for <video>, and
+     the native one when the page is underneath a SurfaceView it cannot
+     draw over. */
+  _osd(msg,ms){
+    if(this._native){try{hostBridge.nvOsd(msg,ms||1600)}catch(e){}return}
+    const osd=document.getElementById("vid-osd");
+    if(!osd)return;
+    osd.textContent=msg;osd.style.opacity="1";
+    clearTimeout(this._flashT);
+    this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}catch(e){}},
+      ms||1600);
+  },
+  _seekText(delta,t,d){
+    return (delta>0?"▸ ":"◂ ")+
+      (Math.abs(delta)>=60?Math.round(Math.abs(delta)/60)+" min"
+        :Math.abs(delta)+"s")+"   "+this._dur(t*1000)+" / "+this._dur(d*1000);
+  },
+  _nvStart(ctx,v,at){
+    let from=at,resumed=false;
+    if(from==null){
+      const saved=this._positions(ctx)[v.id],dur=(v.dur||0)/1000;
+      if(saved&&(!dur||saved<dur*this._RESUME_END)){from=saved;resumed=true}
+      else from=0;
+    }
+    let ok=false;
+    try{ok=hostBridge.nvPlay(v.id,from)}catch(e){}
+    if(!ok){
+      this._native=false;this._playing=null;
+      this._note="the device player could not start";render();return;
+    }
+    this._nvT=null;
+    if(resumed)this._osd("resumed "+this._dur(from*1000)+"   ◄ back 5 min",2600);
+    clearInterval(this._nvPoll);
+    let last=Date.now();
+    this._nvPoll=setInterval(()=>{
+      if(!this._native||!this._playing||this._playing.id!==v.id){
+        clearInterval(this._nvPoll);return;
+      }
+      const s=this._nvState();
+      if(s.err){
+        const m=s.err;this._stop(ctx);
+        this._note="could not play this file ("+m+")";render();return;
+      }
+      if(s.ended){
+        const p=this._positions(ctx);delete p[v.id];ctx.storage.set("pos",p);
+        this._stop(ctx);render();return;
+      }
+      /* Only once the player is real. Before that the reported time is
+         just the requested start, and the duration is zero. */
+      if(s.prepared&&Date.now()-last>=5000){
+        last=Date.now();
+        this._savePos(ctx,v.id,s.t||0,s.dur||0);
+      }
+    },1000);
+  },
   _url(v){
     let base="";try{base=hostBridge.mediaBase()}catch(e){}
     return base+"?vid="+v.id;
@@ -5620,7 +5840,8 @@ const cardVideo={
     if(r.season){this._season=r.season;this._level="files";this.sel=0;
       ctx.rerender();return}
     const v=r.video;
-    if(!this._playable(v)){
+    const nat=this._needsNative(v);
+    if(!this._playable(v)&&!nat){
       /* hand it over rather than showing a black rectangle */
       let ok=false;
       try{ok=hostBridge&&hostBridge.openVideo&&hostBridge.openVideo(v.id)}
@@ -5633,8 +5854,9 @@ const cardVideo={
        fault, not a feature */
     try{audioBus.stop()}catch(e){}
     this._touch(ctx,v.id);
-    this._playing=v;this._note="";
-    mode="full";render();this._wire(ctx);
+    this._playing=v;this._note="";this._native=nat;
+    mode="full";render();
+    if(nat)this._nvStart(ctx,v,null);else this._wire(ctx);
   },
   /* ---- resume where you stopped ----
      Positions are kept per video id in card storage, so they ride
@@ -5736,6 +5958,27 @@ const cardVideo={
         const p=this._positions(ctx);delete p[v.id];ctx.storage.set("pos",p);
         this._stop();render();
       });
+      /* A failed <video> is dead for good: every later seek is accepted,
+         the OSD prints the new time, and nothing ever plays again. That was
+         silent. Now it hands over to the device's player at the same spot,
+         or says what happened when there is no such player. */
+      el.addEventListener("error",()=>{
+        if(!this._playing||this._playing.id!==v.id||this._native)return;
+        const msg=el.error&&el.error.message||"playback error";
+        const at=el.currentTime>1?el.currentTime
+          :(this._positions(ctx)[v.id]||0);
+        try{console.log("video error -> "+msg+" at "+at)}catch(e){}
+        if(this._nvOk()){
+          try{el.removeAttribute("src");el.load()}catch(e){}
+          this._node=null;this._nodeId=null;
+          this._native=true;render();
+          this._nvStart(ctx,v,at);
+          this._osd("switched to the device player",2600);
+        }else{
+          this._stop(ctx);
+          this._note="this video stopped: "+msg;render();
+        }
+      });
     },0);
   },
   /* Seek, and say so on screen. A jump on a long file takes a moment to
@@ -5747,17 +5990,36 @@ const cardVideo={
       if(!(typeof d==="number"&&isFinite(d)&&d>0))return;
       const t=Math.max(0,Math.min(d-1,(el.currentTime||0)+delta));
       el.currentTime=t;
-      this._flash=(delta>0?"▸ ":"◂ ")+
-        (Math.abs(delta)>=60?Math.round(Math.abs(delta)/60)+" min"
-          :Math.abs(delta)+"s")+"   "+this._dur(t*1000)+" / "+
-        this._dur(d*1000);
-      clearTimeout(this._flashT);
-      const osd=document.getElementById("vid-osd");
-      if(osd){osd.textContent=this._flash;osd.style.opacity="1";
-        this._flashT=setTimeout(()=>{try{osd.style.opacity="0"}catch(e){}},1600);}
+      this._flash=this._seekText(delta,t,d);
+      this._osd(this._flash,1600);
     }catch(e){}
   },
+  /* The native player's seek. The bridge applies it asynchronously, so a
+     quick second press could read the position from before the first one
+     landed; holding the target for a moment lets presses stack. */
+  _nvSeek(delta){
+    const s=this._nvState();
+    const d=s.dur||((this._playing&&this._playing.dur)||0)/1000;
+    if(!(d>0))return;
+    const from=(this._nvT!=null&&Date.now()-this._nvTAt<1500)?this._nvT:(s.t||0);
+    const t=Math.max(0,Math.min(d-1,from+delta));
+    try{hostBridge.nvCmd("seek",t)}catch(e){}
+    this._nvT=t;this._nvTAt=Date.now();
+    this._osd(this._seekText(delta,t,d),1600);
+  },
   _stop(ctx){
+    if(this._native){
+      clearInterval(this._nvPoll);this._nvPoll=null;
+      /* record before tearing down, same as the <video> path - but only a
+         real position: before prepare it is just the requested start */
+      try{
+        const s=this._nvState();
+        if(ctx&&this._playing&&s.prepared)
+          this._savePos(ctx,this._playing.id,s.t||0,s.dur||0);
+      }catch(e){}
+      try{hostBridge.nvCmd("stop",0)}catch(e){}
+      this._native=false;this._nvT=null;
+    }
     const el=document.getElementById("vid-el");
     if(el){
       /* record before tearing down - stopping mid-film is precisely when
@@ -5805,6 +6067,10 @@ const cardVideo={
     if(!hostBridge||!hostBridge.listVideo)
       return "<div class='state'>Local video needs the AMBIENT app — a web "+
         "page has no filesystem to read.</div>";
+    /* The device's player is drawing over the whole WebView; the stage
+       underneath only needs to be dark in case it ever shows through. */
+    if(this._playing&&this._native)
+      return "<div style='width:100%;height:100%;background:#000'></div>";
     if(this._playing){
       const v=this._playing;
       /* Re-wire on EVERY render, not just when playback starts. render()
@@ -5851,8 +6117,11 @@ const cardVideo={
     (this._playing?"stop":this._level!=="folders"?"up a level":"to tiles")+
     "<br>playing: ◄► jump 5 min · ▲▼ 30s · "+
     "OK pause · BACK stop"+
-    "<br>amber = this device can play it but the cockpit cannot; "+
-    "OK hands it to the system player</div>";
+    (this._nvOk()
+      ?"<br>amber = the cockpit cannot decode it, so the device's own "+
+       "player takes it - films over 2 GB do too</div>"
+      :"<br>amber = this device can play it but the cockpit cannot; "+
+       "OK hands it to the system player</div>");
   },
   renderCompact(ctx){
     if(!hostBridge||!hostBridge.listVideo)return face("—","app only");
@@ -5866,6 +6135,16 @@ const cardVideo={
         :ok+" playable here"});
   },
   onKey(ctx,k,held){
+    if(this._playing&&this._native){
+      /* Same keys as the <video> below, sent to the device's player */
+      if(k==="enter"){try{hostBridge.nvCmd("toggle",0)}catch(e){}return true}
+      const step=(k==="left"||k==="right")?300:(k==="up"||k==="down")?30:0;
+      if(step){
+        this._nvSeek(((k==="left"||k==="down")?-1:1)*step*(held?2:1));
+        return true;
+      }
+      return false;
+    }
     if(this._playing){
       const el=document.getElementById("vid-el");
       if(k==="enter"&&el){
@@ -6305,6 +6584,7 @@ registerCards([cardClock,cardWeather,cardMarkets,cardHeadlines,
   cardTale,
   cardVis,
   cardLaunch,
+  cardWifi,
   cardScenes,
   cardDisplay,
   cardDevice,cardSystem]);
